@@ -293,7 +293,7 @@ object ContainerSystemdManager {
 
     // Systemctl commands
     suspend fun startService(containerName: String, serviceName: String) =
-        executeSystemctlCommand(containerName, "start $serviceName")
+        executeSystemctlCommand(containerName, "start --no-block $serviceName")
 
     suspend fun stopService(containerName: String, serviceName: String) =
         executeSystemctlCommand(containerName, "stop $serviceName")
