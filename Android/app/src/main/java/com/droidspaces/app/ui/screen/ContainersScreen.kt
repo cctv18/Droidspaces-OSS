@@ -301,6 +301,10 @@ fun ContainersScreen(
             // Save logs to cache when operation completes (only last action)
             prefsManager.saveContainerLogs(container.name, logs.toList())
 
+            // Add a tiny delay before clearing status to allow TerminalConsole 
+            // to finish its final scroll animation for the "Success" message.
+            kotlinx.coroutines.delay(200)
+
             // Clear running operation state (but keep console open)
             runningOperationContainer = null
         }

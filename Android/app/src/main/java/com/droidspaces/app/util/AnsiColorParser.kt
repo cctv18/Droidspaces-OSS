@@ -97,7 +97,7 @@ object AnsiColorParser {
                 // Parse ANSI codes
                 val codes = match.groupValues[1]
                 if (codes.isEmpty()) {
-                    // Reset all styles
+                    // Reset all styles (\u001B[m)
                     currentColor = null
                     currentBgColor = null
                     isBold = false
@@ -105,7 +105,8 @@ object AnsiColorParser {
                     isItalic = false
                     isUnderline = false
                 } else {
-                    val codeList = codes.split(';').mapNotNull { it.toIntOrNull() }
+                    // Support both ';' and ':' as separators for complex codes
+                    val codeList = codes.split(Regex("[;:]")).mapNotNull { it.toIntOrNull() }
                     for (code in codeList) {
                         when (code) {
                             0 -> {

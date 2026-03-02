@@ -114,10 +114,11 @@ fun TerminalConsole(
         }
     }
 
-    // isProcessing intentionally excluded — it was cancelling in-flight animations.
     // logs.size handles new lines; maxValue handles layout settling after measurement.
     LaunchedEffect(logs.size, verticalScrollState.maxValue) {
         if (!userScrolledUp) {
+            // Wait for measurement to stabilize before animating
+            kotlinx.coroutines.delay(50)
             verticalScrollState.animateScrollTo(
                 value = verticalScrollState.maxValue,
                 animationSpec = spring(
