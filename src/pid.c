@@ -129,9 +129,11 @@ int is_container_running(struct ds_config *cfg, pid_t *pid_out) {
   }
 
   pid_t pid = 0;
-  if (read_and_validate_pid(cfg->pidfile, &pid) == 0 && pid > 0) {
-    if (pid_out)
-      *pid_out = pid;
+  int ret = read_and_validate_pid(cfg->pidfile, &pid);
+  if (pid_out)
+    *pid_out = pid;
+
+  if (ret == 0 && pid > 0) {
     return 1;
   }
 

@@ -400,8 +400,15 @@ int read_and_validate_pid(const char *pidfile, pid_t *pid_out) {
      * Likely still running if it was ours. */
   }
 
+  /*
+   * Crucial Fix: Distinguish between "process is gone" (-1) and
+   * "process exists but is not a Droidspaces container" (-2).
+   * Pruning logic must ONLY nuke files when the process is truly gone.
+   */
   if (!is_valid_container_pid((pid_t)val)) {
-    return -1;
+    if (pid_out)
+      *pid_out = (pid_t)val; /* Return the PID so caller knows it exists */
+    return -2;
   }
 
   if (pid_out)
