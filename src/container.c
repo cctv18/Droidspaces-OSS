@@ -1156,7 +1156,10 @@ int enter_rootfs(struct ds_config *cfg, const char *user) {
 
   /* Parse environment file while host paths are reachable */
   if (cfg->env_file[0] != '\0') {
+    int prev_silent = ds_log_silent;
+    ds_log_silent = 1;
     parse_env_file_to_config(cfg->env_file, cfg);
+    ds_log_silent = prev_silent;
   }
 
   ds_log("Entering container '%s' as %s...", cfg->container_name,
@@ -1306,7 +1309,10 @@ int run_in_rootfs(struct ds_config *cfg, int argc, char **argv) {
 
   /* Parse environment file while host paths are reachable */
   if (cfg->env_file[0] != '\0') {
+    int prev_silent = ds_log_silent;
+    ds_log_silent = 1;
     parse_env_file_to_config(cfg->env_file, cfg);
+    ds_log_silent = prev_silent;
   }
 
   pid_t child = fork();
