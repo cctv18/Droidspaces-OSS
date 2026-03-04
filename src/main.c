@@ -157,8 +157,6 @@ static int auto_resolve_container_name(struct ds_config *cfg) {
 
   if (count == 1) {
     safe_strncpy(cfg->container_name, first_name, sizeof(cfg->container_name));
-    ds_log("Auto-selected running container: " C_BOLD "%s" C_RESET,
-           cfg->container_name);
     return 0;
   }
 
