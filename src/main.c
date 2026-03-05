@@ -53,6 +53,8 @@ void print_usage(void) {
   printf(
       "  -B, --bind-mount=SRC:DEST Bind mount host directory into container\n");
   printf("  -C, --conf=PATH           Load configuration from file\n");
+  printf("      --reset               Reset config to defaults (keeps "
+         "name/rootfs)\n");
   printf("  --help                    Show this help message\n\n");
 
   printf(C_BOLD "Examples:" C_RESET "\n");
@@ -231,6 +233,7 @@ int main(int argc, char **argv) {
       {"conf", required_argument, 0, 'C'},
       {"config", required_argument, 0, 'C'},
       {"env", required_argument, 0, 'E'},
+      {"reset", no_argument, 0, 256},
       {"help", no_argument, 0, 'v'},
       {0, 0, 0, 0}};
 
@@ -245,6 +248,7 @@ int main(int argc, char **argv) {
    */
   const char *discovered_cmd = NULL;
   char temp_r[PATH_MAX] = {0}, temp_i[PATH_MAX] = {0};
+  int reset_config = 0;
   int opt;
 
   /* 1. Discovery Pass: Capture identity and command without permuting argv.
@@ -268,6 +272,8 @@ int main(int argc, char **argv) {
       safe_strncpy(temp_r, optarg, sizeof(temp_r));
     } else if (opt == 'i') {
       safe_strncpy(temp_i, optarg, sizeof(temp_i));
+    } else if (opt == 256) {
+      reset_config = 1;
     }
   }
   optind = 0; /* Reset for next steps */
@@ -293,6 +299,43 @@ int main(int argc, char **argv) {
     } else if (cfg.container_name[0]) {
       ds_config_load_by_name(cfg.container_name, &cfg);
     }
+  }
+
+  /* Apply reset if requested: wipe config but preserve identity and unknown
+   * keys */
+  if (reset_config) {
+    char save_name[256];
+    char save_rootfs[PATH_MAX];
+    char save_rootfs_img[PATH_MAX];
+    char save_config[PATH_MAX];
+    char save_prog[64];
+    struct ds_config_line *save_head = cfg.unknown_head;
+    struct ds_config_line *save_tail = cfg.unknown_tail;
+    int save_config_file_specified = cfg.config_file_specified;
+    int save_config_file_existed = cfg.config_file_existed;
+
+    safe_strncpy(save_name, cfg.container_name, sizeof(save_name));
+    safe_strncpy(save_rootfs, cfg.rootfs_path, sizeof(save_rootfs));
+    safe_strncpy(save_rootfs_img, cfg.rootfs_img_path, sizeof(save_rootfs_img));
+    safe_strncpy(save_config, cfg.config_file, sizeof(save_config));
+    safe_strncpy(save_prog, cfg.prog_name, sizeof(save_prog));
+
+    free_config_env_vars(&cfg);
+    free_config_binds(&cfg);
+
+    memset(&cfg, 0, sizeof(cfg));
+
+    safe_strncpy(cfg.container_name, save_name, sizeof(cfg.container_name));
+    safe_strncpy(cfg.rootfs_path, save_rootfs, sizeof(cfg.rootfs_path));
+    safe_strncpy(cfg.rootfs_img_path, save_rootfs_img,
+                 sizeof(cfg.rootfs_img_path));
+    safe_strncpy(cfg.config_file, save_config, sizeof(cfg.config_file));
+    safe_strncpy(cfg.prog_name, save_prog, sizeof(cfg.prog_name));
+
+    cfg.unknown_head = save_head;
+    cfg.unknown_tail = save_tail;
+    cfg.config_file_specified = save_config_file_specified;
+    cfg.config_file_existed = save_config_file_existed;
   }
 
   /* 2. Override Pass: Apply CLI flags on top of config.
