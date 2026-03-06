@@ -176,36 +176,6 @@ static int auto_resolve_container_name(struct ds_config *cfg) {
   return 0;
 }
 
-/**
- * Unified helper to resolve name, auto-select if needed, and load config.
- * Performs a recovery scan if the name is known but config is missing.
- */
-static int resolve_and_load_config(struct ds_config *cfg) {
-  if (auto_resolve_container_name(cfg) < 0)
-    return -1;
-
-  int config_err = ds_config_load_by_name(cfg->container_name, cfg);
-  pid_t pid = 0;
-  int is_running = is_container_running(cfg, &pid);
-
-  if (config_err < 0 || !is_running || pid <= 0) {
-    /* If still not found, search system as a last resort (recovery scan) */
-    int prev_silent = ds_log_silent;
-    ds_log_silent = 1;
-    scan_containers();
-    ds_log_silent = prev_silent;
-
-    config_err = ds_config_load_by_name(cfg->container_name, cfg);
-  }
-
-  if (config_err < 0) {
-    ds_error("Container '%s' not found or metadata missing.",
-             cfg->container_name);
-    return -1;
-  }
-  return 0;
-}
-
 /* ---------------------------------------------------------------------------
  * Command Dispatch
  * ---------------------------------------------------------------------------*/
@@ -353,7 +323,24 @@ int main(int argc, char **argv) {
   }
   optind = 0; /* Reset for next steps */
 
-  /* Load configuration if specified or available */
+  /*
+   * Unified Configuration Discovery and Loading
+   * 1. Try to load from explicitly provided config file.
+   * 2. Otherwise try to auto-detect config from rootfs paths.
+   * 3. Ensure we have a container name for stateful commands.
+   * 4. Perform a recovery scan to load from ~/.local/share/... if config hasn't
+   * been loaded yet.
+   */
+  int is_stateful =
+      (discovered_cmd && (strcmp(discovered_cmd, "stop") == 0 ||
+                          strcmp(discovered_cmd, "restart") == 0 ||
+                          strcmp(discovered_cmd, "status") == 0 ||
+                          strcmp(discovered_cmd, "pid") == 0 ||
+                          strcmp(discovered_cmd, "info") == 0 ||
+                          strcmp(discovered_cmd, "enter") == 0 ||
+                          strcmp(discovered_cmd, "run") == 0));
+
+  int loaded = 0;
   if (cfg.config_file_specified) {
     if (ds_config_load(cfg.config_file, &cfg) < 0) {
       ds_error("Failed to load configuration from '%s': %s", cfg.config_file,
@@ -361,19 +348,57 @@ int main(int argc, char **argv) {
       ret = 1;
       goto cleanup;
     }
+    loaded = 1;
   } else {
     char *auto_p = ds_config_auto_path(temp_r[0] ? temp_r : temp_i);
     if (auto_p) {
       safe_strncpy(cfg.config_file, auto_p, sizeof(cfg.config_file));
-      /* Auto-load is best-effort, but we warn if it fails surprisingly */
-      if (ds_config_load(cfg.config_file, &cfg) < 0 && errno != ENOENT) {
+      if (ds_config_load(cfg.config_file, &cfg) == 0) {
+        loaded = 1;
+      } else if (errno != ENOENT) {
         ds_warn("Failed to load auto-detected config from '%s': %s",
                 cfg.config_file, strerror(errno));
       }
       free(auto_p);
-    } else if (cfg.container_name[0]) {
-      ds_config_load_by_name(cfg.container_name, &cfg);
     }
+  }
+
+  /* For stateful commands, we absolutely need a container name.
+   * If we don't have one by now, try to guess the active container. */
+  if (is_stateful && cfg.container_name[0] == '\0') {
+    if (auto_resolve_container_name(&cfg) < 0) {
+      ret = 1;
+      goto cleanup;
+    }
+  }
+
+  /* If we have a name but haven't successfully loaded a config file yet, load
+   * by name. */
+  if (!loaded && cfg.container_name[0] != '\0') {
+    if (ds_config_load_by_name(cfg.container_name, &cfg) < 0) {
+      /* If loading by name fails and it's a stateful command, maybe the
+       * container was moved or renamed. Perform a recovery scan of running
+       * systems as a last resort. */
+      if (is_stateful) {
+        int prev = ds_log_silent;
+        ds_log_silent = 1;
+        scan_containers();
+        ds_log_silent = prev;
+
+        if (ds_config_load_by_name(cfg.container_name, &cfg) < 0) {
+          ds_error("Container '%s' not found or metadata missing.",
+                   cfg.container_name);
+          ret = 1;
+          goto cleanup;
+        }
+      }
+    }
+  }
+
+  /* Apply configuration reset immediately AFTER disk load, BEFORE CLI overrides
+   */
+  if (reset_config) {
+    apply_reset_config(&cfg, cli_net_mode_set, cli_net_mode);
   }
 
   /* 2. Override Pass: Apply CLI flags on top of config.
@@ -493,13 +518,6 @@ int main(int argc, char **argv) {
     parse_env_file_to_config(cfg.env_file, &cfg);
   }
 
-  /* Prevent foreground mode in non-interactive environments */
-  if (cfg.foreground && (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))) {
-    ds_error("Foreground mode requires a fully interactive terminal.");
-    ret = 1;
-    goto cleanup;
-  }
-
   if (optind >= argc) {
     ds_error(C_BOLD "Missing command" C_RESET);
     ret = 1;
@@ -507,6 +525,17 @@ int main(int argc, char **argv) {
   }
 
   const char *cmd = argv[optind];
+
+  /* Prevent foreground mode in non-interactive environments for interactive
+   * commands */
+  if (cfg.foreground && (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))) {
+    if (strcmp(cmd, "start") == 0 || strcmp(cmd, "restart") == 0 ||
+        strcmp(cmd, "enter") == 0) {
+      ds_error("Foreground mode requires a fully interactive terminal.");
+      ret = 1;
+      goto cleanup;
+    }
+  }
 
   /* Basic info commands */
   if (strcmp(cmd, "check") == 0) {
@@ -572,25 +601,15 @@ int main(int argc, char **argv) {
   }
 
   if (strcmp(cmd, "stop") == 0) {
-    if (resolve_and_load_config(&cfg) < 0) {
-      ret = 1;
-      goto cleanup;
-    }
     ret = stop_rootfs(&cfg, 0);
     goto cleanup;
   }
 
   if (strcmp(cmd, "restart") == 0) {
-    if (resolve_and_load_config(&cfg) < 0) {
-      ret = 1;
-      goto cleanup;
-    }
     if (check_requirements() < 0) {
       ret = 1;
       goto cleanup;
     }
-    if (reset_config)
-      apply_reset_config(&cfg, cli_net_mode_set, cli_net_mode);
     enforce_nat_safety(&cfg, argc, argv);
     print_ds_banner();
     ret = restart_rootfs(&cfg);
@@ -598,10 +617,6 @@ int main(int argc, char **argv) {
   }
 
   if (strcmp(cmd, "status") == 0) {
-    if (resolve_and_load_config(&cfg) < 0) {
-      ret = 1;
-      goto cleanup;
-    }
     if (is_container_running(&cfg, NULL)) {
       printf("Container '%s' is " C_GREEN "Running" C_RESET "\n",
              cfg.container_name);
@@ -615,10 +630,6 @@ int main(int argc, char **argv) {
   }
 
   if (strcmp(cmd, "pid") == 0) {
-    if (resolve_and_load_config(&cfg) < 0) {
-      ret = 1;
-      goto cleanup;
-    }
     pid_t pid = 0;
     if (is_container_running(&cfg, &pid) && pid > 0) {
       printf("%d\n", (int)pid);
@@ -631,19 +642,11 @@ int main(int argc, char **argv) {
   }
 
   if (strcmp(cmd, "info") == 0) {
-    if (resolve_and_load_config(&cfg) < 0) {
-      ret = 1;
-      goto cleanup;
-    }
     ret = show_info(&cfg, 0);
     goto cleanup;
   }
 
   if (strcmp(cmd, "enter") == 0) {
-    if (resolve_and_load_config(&cfg) < 0) {
-      ret = 1;
-      goto cleanup;
-    }
     if (validate_kernel_version() < 0) {
       ret = 1;
       goto cleanup;
@@ -654,10 +657,6 @@ int main(int argc, char **argv) {
   }
 
   if (strcmp(cmd, "run") == 0) {
-    if (resolve_and_load_config(&cfg) < 0) {
-      ret = 1;
-      goto cleanup;
-    }
     if (validate_kernel_version() < 0) {
       ret = 1;
       goto cleanup;
