@@ -673,110 +673,43 @@ flush_collected:
  * Returns 0 on success, -ENOENT if no default route found.
  * ---------------------------------------------------------------------------*/
 
-int ds_nl_get_default_gw_table(ds_nl_ctx_t *ctx, char *ifname_out,
-                               int *table_out) {
+/* ---------------------------------------------------------------------------
+ * Per-interface route table lookup
+ *
+ * Finds the routing table that holds the IPv4 default route for a specific
+ * named interface. This is the core primitive used by the upstream monitor:
+ * rather than guessing the active internet table from all routes (which is
+ * ambiguous on Android where multiple interfaces can have simultaneous
+ * default routes in separate per-interface tables), we ask directly:
+ * "what table does wlan0 / rmnet0 / ccmni1 use?"
+ *
+ * Returns 0 and fills *table_out on success.
+ * Returns -ENODEV if the interface doesn't exist.
+ * Returns -ENOENT if no default route is found for that interface.
+ * ---------------------------------------------------------------------------*/
+int ds_nl_get_iface_table(ds_nl_ctx_t *ctx, const char *ifname,
+                          int *table_out) {
+  unsigned int target_idx = if_nametoindex(ifname);
+  if (target_idx == 0)
+    return -ENODEV;
+
+  struct {
+    struct nlmsghdr n;
+    struct rtmsg r;
+  } req;
+  memset(&req, 0, sizeof(req));
+  req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
+  req.n.nlmsg_type = RTM_GETROUTE;
+  req.n.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+  req.r.rtm_family = AF_INET;
+  req.n.nlmsg_seq = ++ctx->seq;
+  req.n.nlmsg_pid = (uint32_t)ctx->pid;
+
+  if (send(ctx->fd, &req, req.n.nlmsg_len, 0) < 0)
+    return -errno;
+
   uint8_t buf[NL_BUFSIZE];
-
-  /* ── Phase 1: dump IPv4 policy rules to build the "active table" set ──────
-   *
-   * On Android, network switches primarily change POLICY RULES (RTM_NEWRULE /
-   * RTM_DELRULE), not the per-table route entries.  Both wlan0 and ccmni1 can
-   * simultaneously have a default route, but only one set of policy rules is
-   * active.  Picking the first high-numbered table from the route dump is
-   * therefore ambiguous — we must cross-reference with the rule set.
-   *
-   * "Active" rule criteria:
-   *   - family  = AF_INET
-   *   - action  = FR_ACT_TO_TBL (1)  → maps to r->rtm_type via fib_rule_hdr
-   *   - table   > 100
-   *   - priority 1000 – 31000  (Android's per-network rule band)
-   * -------------------------------------------------------------------------*/
-
-#define MAX_RULE_TABLES 32
-  int rule_tables[MAX_RULE_TABLES];
-  int rule_count = 0;
-
-  {
-    struct {
-      struct nlmsghdr n;
-      struct rtmsg r;
-    } rreq;
-    memset(&rreq, 0, sizeof(rreq));
-    rreq.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
-    rreq.n.nlmsg_type = RTM_GETRULE;
-    rreq.n.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
-    rreq.r.rtm_family = AF_INET;
-    rreq.n.nlmsg_seq = ++ctx->seq;
-    rreq.n.nlmsg_pid = (uint32_t)ctx->pid;
-
-    if (send(ctx->fd, &rreq, rreq.n.nlmsg_len, 0) >= 0) {
-      for (;;) {
-        ssize_t n = recv(ctx->fd, buf, sizeof(buf), 0);
-        if (n <= 0)
-          break;
-        struct nlmsghdr *h = (struct nlmsghdr *)buf;
-        for (; NLMSG_OK(h, (uint32_t)n); h = NLMSG_NEXT(h, n)) {
-          if (h->nlmsg_type == NLMSG_DONE)
-            goto rules_done;
-          if (h->nlmsg_type != RTM_NEWRULE)
-            continue;
-
-          struct rtmsg *r = NLMSG_DATA(h);
-          if (r->rtm_family != AF_INET)
-            continue;
-          /* fib_rule_hdr.action overlaps rtmsg.rtm_type; FR_ACT_TO_TBL = 1 */
-          if (r->rtm_type != 1)
-            continue;
-
-          int r_table = r->rtm_table;
-          int r_prio = 0;
-
-          struct rtattr *rta = RTM_RTA(r);
-          int rlen = (int)RTM_PAYLOAD(h);
-          for (; RTA_OK(rta, rlen); rta = RTA_NEXT(rta, rlen)) {
-            if (rta->rta_type == FRA_TABLE)
-              r_table = *(int *)RTA_DATA(rta);
-            if (rta->rta_type == FRA_PRIORITY)
-              r_prio = *(int *)RTA_DATA(rta);
-          }
-
-          if (r_table > 100 && r_prio >= 1000 && r_prio <= 31000) {
-            int dup = 0;
-            for (int i = 0; i < rule_count; i++)
-              if (rule_tables[i] == r_table) {
-                dup = 1;
-                break;
-              }
-            if (!dup && rule_count < MAX_RULE_TABLES)
-              rule_tables[rule_count++] = r_table;
-          }
-        }
-      }
-    }
-  }
-rules_done:;
-
-  /* ── Phase 2: route dump — cross-reference against the active rule set ── */
-
-  {
-    struct {
-      struct nlmsghdr n;
-      struct rtmsg r;
-    } req;
-    memset(&req, 0, sizeof(req));
-    req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
-    req.n.nlmsg_type = RTM_GETROUTE;
-    req.n.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
-    req.r.rtm_family = AF_INET;
-    req.n.nlmsg_seq = ++ctx->seq;
-    req.n.nlmsg_pid = (uint32_t)ctx->pid;
-    if (send(ctx->fd, &req, req.n.nlmsg_len, 0) < 0)
-      return -errno;
-  }
-
-  int found = 0; /* 1 = rule-matched route, 2 = fallback route */
-  char best_ifname[IFNAMSIZ] = {0};
-  int best_table = 0;
+  int found_table = 0;
 
   for (;;) {
     ssize_t n = recv(ctx->fd, buf, sizeof(buf), 0);
@@ -786,69 +719,39 @@ rules_done:;
     struct nlmsghdr *h = (struct nlmsghdr *)buf;
     for (; NLMSG_OK(h, (uint32_t)n); h = NLMSG_NEXT(h, n)) {
       if (h->nlmsg_type == NLMSG_DONE)
-        goto gw_done;
+        goto iface_table_done;
       if (h->nlmsg_type != RTM_NEWROUTE)
         continue;
 
       struct rtmsg *r = NLMSG_DATA(h);
-      if (r->rtm_dst_len != 0)
-        continue; /* skip non-default routes */
-
-      int r_table = r->rtm_table;
-      char r_if[IFNAMSIZ] = {0};
-
-      struct rtattr *rta = RTM_RTA(r);
-      int len = (int)RTM_PAYLOAD(h);
-      for (; RTA_OK(rta, len); rta = RTA_NEXT(rta, len)) {
-        if (rta->rta_type == RTA_TABLE)
-          r_table = *(int *)RTA_DATA(rta);
-        if (rta->rta_type == RTA_OIF) {
-          int ifidx = *(int *)RTA_DATA(rta);
-          if_indextoname((unsigned int)ifidx, r_if);
-        }
-      }
-
-      if (!r_if[0] || strcmp(r_if, "dummy0") == 0)
+      /* Only IPv4 default routes */
+      if (r->rtm_family != AF_INET || r->rtm_dst_len != 0)
         continue;
 
-      if (r_table > 100) {
-        /* Check if this table has an active policy rule (Phase-1 result) */
-        int rule_active = 0;
-        for (int i = 0; i < rule_count; i++)
-          if (rule_tables[i] == r_table) {
-            rule_active = 1;
-            break;
-          }
+      int r_table = r->rtm_table;
+      int r_oif = 0;
 
-        if (rule_active) {
-          /* Best possible match: route table confirmed by policy rule */
-          best_table = r_table;
-          safe_strncpy(best_ifname, r_if, IFNAMSIZ);
-          found = 1;
-          goto gw_done;
-        } else if (found < 1) {
-          /* No rule confirmation yet — keep as fallback */
-          best_table = r_table;
-          safe_strncpy(best_ifname, r_if, IFNAMSIZ);
-          found = 2;
-        }
-      } else if (found == 0) {
-        /* Desktop Linux: main table (254) — lowest priority fallback */
-        best_table = r_table;
-        safe_strncpy(best_ifname, r_if, IFNAMSIZ);
-        found = 2;
+      struct rtattr *rta = RTM_RTA(r);
+      int rlen = (int)RTM_PAYLOAD(h);
+      for (; RTA_OK(rta, rlen); rta = RTA_NEXT(rta, rlen)) {
+        if (rta->rta_type == RTA_TABLE)
+          r_table = *(int *)RTA_DATA(rta);
+        if (rta->rta_type == RTA_OIF)
+          r_oif = *(int *)RTA_DATA(rta);
+      }
+
+      if ((unsigned int)r_oif == target_idx) {
+        found_table = r_table;
+        goto iface_table_done;
       }
     }
   }
 
-gw_done:
-#undef MAX_RULE_TABLES
-  if (!found)
+iface_table_done:
+  if (!found_table)
     return -ENOENT;
   if (table_out)
-    *table_out = best_table;
-  if (ifname_out)
-    safe_strncpy(ifname_out, best_ifname, IFNAMSIZ);
+    *table_out = found_table;
   return 0;
 }
 

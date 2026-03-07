@@ -53,6 +53,16 @@ void print_usage(void) {
       "  -X, --termux-x11          Enable Termux-X11 support (Android only)\n");
   printf("      --net=MODE            Networking mode: host (default), nat, "
          "none\n");
+  printf("      --upstream IFACE[,..] Upstream internet interface(s) for nat "
+         "mode\n"
+         "                            REQUIRED with --net=nat. Comma-separated "
+         "list\n"
+         "                            in priority order. Monitor tracks "
+         "whichever\n"
+         "                            is currently active (RUNNING + has a "
+         "route).\n"
+         "                            e.g. --upstream wlan0\n"
+         "                            e.g. --upstream wlan0,rmnet0,ccmni1\n");
   printf(
       "      --port HOST:CONT[/proto] Forward host port to container (nat "
       "mode)\n"
@@ -224,6 +234,31 @@ static void enforce_nat_safety(struct ds_config *cfg, int argc, char **argv) {
   if (cfg->net_mode != DS_NET_NAT)
     return;
 
+  /* --upstream and --port are only meaningful with --net=nat */
+  if (cfg->upstream_iface_count > 0 && cfg->net_mode != DS_NET_NAT) {
+    ds_warn("--upstream is only valid with --net=nat — ignoring");
+    cfg->upstream_iface_count = 0;
+  }
+  if (cfg->port_forward_count > 0 && cfg->net_mode != DS_NET_NAT) {
+    ds_warn("--port is only valid with --net=nat — ignoring");
+    cfg->port_forward_count = 0;
+  }
+
+  /* --upstream is mandatory when using --net=nat */
+  if (cfg->upstream_iface_count == 0) {
+    printf("\n" C_RED C_BOLD "[ FATAL: --upstream REQUIRED ]" C_RESET "\n\n");
+    ds_error("--net=nat requires --upstream <interface(s)>\n"
+             "\n"
+             "  Specify the host interface(s) that provide internet access.\n"
+             "  The monitor will track whichever is currently active.\n"
+             "\n"
+             "  Examples:\n"
+             "    --upstream wlan0\n"
+             "    --upstream wlan0,rmnet0\n"
+             "    --upstream wlan0,rmnet0,ccmni1,v4-ccmni1");
+    exit(EXIT_FAILURE);
+  }
+
   cfg->enable_ipv6 = 0;
 
   char reason[512];
@@ -278,6 +313,7 @@ int main(int argc, char **argv) {
       {"env", required_argument, 0, 'E'},
       {"net", required_argument, 0, 257},
       {"port", required_argument, 0, 258},
+      {"upstream", required_argument, 0, 259},
       {"reset", no_argument, 0, 256},
       {"help", no_argument, 0, 'v'},
       {0, 0, 0, 0}};
@@ -566,10 +602,68 @@ int main(int argc, char **argv) {
           ret = 1;
           goto cleanup;
         }
-        pf->host_port = (uint16_t)hp;
-        pf->container_port = (uint16_t)cp;
-        cfg.port_forward_count++;
+        int dup = 0;
+        for (int i = 0; i < cfg.port_forward_count; i++) {
+          if (cfg.port_forwards[i].host_port == (uint16_t)hp &&
+              cfg.port_forwards[i].container_port == (uint16_t)cp &&
+              strcmp(cfg.port_forwards[i].proto, pf->proto) == 0) {
+            dup = 1;
+            break;
+          }
+        }
+        if (!dup) {
+          pf->host_port = (uint16_t)hp;
+          pf->container_port = (uint16_t)cp;
+          cfg.port_forward_count++;
+        }
         tok = strtok_r(NULL, ",", &saveptr);
+      }
+      break;
+    }
+
+    case 259: {
+      /* --upstream wlan0,rmnet0,ccmni1  (comma-separated list) */
+      char tmp[256];
+      strncpy(tmp, optarg, sizeof(tmp) - 1);
+      tmp[sizeof(tmp) - 1] = '\0';
+      char *saveptr2;
+      char *tok2 = strtok_r(tmp, ",", &saveptr2);
+      while (tok2) {
+        /* Trim leading/trailing whitespace */
+        while (*tok2 == ' ' || *tok2 == '\t')
+          tok2++;
+        char *end2 = tok2 + strlen(tok2) - 1;
+        while (end2 > tok2 && (*end2 == ' ' || *end2 == '\t'))
+          *end2-- = '\0';
+
+        if (tok2[0] == '\0') {
+          tok2 = strtok_r(NULL, ",", &saveptr2);
+          continue;
+        }
+        if (cfg.upstream_iface_count >= DS_MAX_UPSTREAM_IFACES) {
+          ds_error("Too many --upstream interfaces (max %d)",
+                   DS_MAX_UPSTREAM_IFACES);
+          ret = 1;
+          goto cleanup;
+        }
+        if (strlen(tok2) >= IFNAMSIZ) {
+          ds_error("Interface name too long: '%s' (max %d chars)", tok2,
+                   IFNAMSIZ - 1);
+          ret = 1;
+          goto cleanup;
+        }
+        int dup = 0;
+        for (int i = 0; i < cfg.upstream_iface_count; i++) {
+          if (strcmp(cfg.upstream_ifaces[i], tok2) == 0) {
+            dup = 1;
+            break;
+          }
+        }
+        if (!dup) {
+          safe_strncpy(cfg.upstream_ifaces[cfg.upstream_iface_count++], tok2,
+                       IFNAMSIZ);
+        }
+        tok2 = strtok_r(NULL, ",", &saveptr2);
       }
       break;
     }

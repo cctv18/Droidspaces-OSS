@@ -20,6 +20,7 @@
 #include <getopt.h>
 #include <grp.h>
 #include <limits.h>
+#include <net/if.h>
 #include <pthread.h>
 #include <pty.h>
 #include <sched.h>
@@ -215,6 +216,7 @@ struct ds_tty_info {
  * ---------------------------------------------------------------------------*/
 
 #define DS_MAX_PORT_FORWARDS 32
+#define DS_MAX_UPSTREAM_IFACES 8
 
 struct ds_port_forward {
   uint16_t host_port;      /* port on the Android/Linux host  */
@@ -291,6 +293,10 @@ struct ds_config {
   int port_forward_count;
   char nat_container_ip[INET_ADDRSTRLEN]; /* assigned container IP, for cleanup
                                            */
+
+  /* Upstream interfaces for NAT routing (--upstream wlan0,rmnet0,...) */
+  char upstream_ifaces[DS_MAX_UPSTREAM_IFACES][IFNAMSIZ];
+  int upstream_iface_count;
 };
 
 /* ---------------------------------------------------------------------------
@@ -445,8 +451,7 @@ int ds_nl_add_addr4(ds_nl_ctx_t *ctx, const char *ifname, uint32_t ip_be,
 int ds_nl_add_route4(ds_nl_ctx_t *ctx, uint32_t dst_be, uint8_t dst_len,
                      uint32_t gw_be, int oif_idx);
 int ds_nl_move_to_netns(ds_nl_ctx_t *ctx, const char *ifname, int netns_fd);
-int ds_nl_get_default_gw_table(ds_nl_ctx_t *ctx, char *ifname_out,
-                               int *table_out);
+int ds_nl_get_iface_table(ds_nl_ctx_t *ctx, const char *ifname, int *table_out);
 int ds_nl_add_rule4(ds_nl_ctx_t *ctx, uint32_t src_be, uint8_t src_len,
                     uint32_t dst_be, uint8_t dst_len, int table, int priority);
 int ds_nl_del_rule4(ds_nl_ctx_t *ctx, uint32_t src_be, uint8_t src_len,

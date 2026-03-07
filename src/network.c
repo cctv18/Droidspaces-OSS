@@ -57,6 +57,34 @@ static void veth_peer_ip(pid_t pid, char *buf, size_t sz) {
 }
 
 /* ---------------------------------------------------------------------------
+ * Upstream routing globals — shared by android routing setup and monitor
+ * ---------------------------------------------------------------------------*/
+
+static char g_upstream_ifaces[DS_MAX_UPSTREAM_IFACES][IFNAMSIZ];
+static int g_upstream_count = 0;
+static int g_current_gw_table = 0;
+static pthread_mutex_t g_gw_mutex = PTHREAD_MUTEX_INITIALIZER;
+static int g_route_monitor_sock = -1;
+static volatile sig_atomic_t g_stop_monitor = 0;
+
+/* Returns 1 if ifname exists and is both UP and RUNNING.
+ * On Android, the active data interface has IFF_RUNNING set; an interface
+ * that is physically present but not carrying data loses IFF_RUNNING. */
+static int iface_is_running(const char *ifname) {
+  int fd = socket(AF_INET, SOCK_DGRAM, 0);
+  if (fd < 0)
+    return 0;
+  struct ifreq ifr;
+  memset(&ifr, 0, sizeof(ifr));
+  safe_strncpy(ifr.ifr_name, ifname, IFNAMSIZ);
+  int ret = 0;
+  if (ioctl(fd, SIOCGIFFLAGS, &ifr) == 0)
+    ret = (ifr.ifr_flags & (IFF_UP | IFF_RUNNING)) == (IFF_UP | IFF_RUNNING);
+  close(fd);
+  return ret;
+}
+
+/* ---------------------------------------------------------------------------
  * Public helper: populate a ds_net_handshake from a container init PID
  * ---------------------------------------------------------------------------*/
 
@@ -131,43 +159,60 @@ int fix_networking_host(struct ds_config *cfg) {
 /* ---------------------------------------------------------------------------
  * Android-specific policy routing
  *
- * Discovers which routing table holds the internet default route, then injects
- * low-priority ip rules that direct our container subnet there.
+ * Iterates the user-declared upstream interfaces in priority order, finds the
+ * first one that is RUNNING and has an IPv4 default route, then injects
+ * low-priority ip rules to direct container traffic through that table.
+ *
+ * This replaces the old auto-detection approach which was unreliable on
+ * Android MTK/Qualcomm because both wlan0 and mobile-data interfaces can
+ * have simultaneous default routes in per-interface tables; only the policy
+ * rules distinguish which is active, and parsing those rules was fragile.
  * ---------------------------------------------------------------------------*/
 
-static void ds_net_setup_android_routing(ds_nl_ctx_t *ctx) {
-  char gw_iface[IFNAMSIZ] = {0};
+static void ds_net_setup_android_routing(ds_nl_ctx_t *ctx,
+                                         const char ifaces[][IFNAMSIZ],
+                                         int iface_count) {
+  char active_iface[IFNAMSIZ] = {0};
   int gw_table = 0;
 
-  int ret = ds_nl_get_default_gw_table(ctx, gw_iface, &gw_table);
-  if (ret < 0) {
-    ds_warn("[NET] Android routing: no default gateway table found, "
-            "skipping ip rule injection");
-    return;
-  }
-
-  ds_log("[NET] Android routing: default gateway in table %d via %s", gw_table,
-         gw_iface);
-
-  if (strcmp(gw_iface, "dummy0") == 0) {
-    ds_warn("[NET] Android routing: gw_iface is dummy0, skipping");
-    return;
+  for (int i = 0; i < iface_count; i++) {
+    if (!iface_is_running(ifaces[i]))
+      continue;
+    if (ds_nl_get_iface_table(ctx, ifaces[i], &gw_table) == 0) {
+      safe_strncpy(active_iface, ifaces[i], IFNAMSIZ);
+      break;
+    }
   }
 
   uint32_t subnet_be, mask_be;
   parse_cidr(DS_DEFAULT_SUBNET, &subnet_be, &mask_be);
   uint8_t prefix = DS_NAT_PREFIX;
 
-  /* Priority 90: traffic destined for our subnet → main table */
-  ret = ds_nl_add_rule4(ctx, 0, 0, subnet_be, prefix, RT_TABLE_MAIN, 90);
+  /* Priority 90: inbound traffic to our subnet always resolves via main table.
+   * Install this even if no upstream is active yet — the monitor will handle
+   * the priority-100 rule once an interface comes up. */
+  int ret = ds_nl_add_rule4(ctx, 0, 0, subnet_be, prefix, RT_TABLE_MAIN, 90);
   if (ret < 0)
     ds_warn("[NET] Android routing: failed to add 'to subnet' rule (90)");
 
-  /* Priority 100: traffic from our subnet → internet table */
+  if (!active_iface[0]) {
+    ds_warn("[NET] Android routing: no upstream interface is active yet — "
+            "route monitor will install rule when one comes up");
+    return;
+  }
+
+  ds_log("[NET] Android routing: active upstream %s → table %d", active_iface,
+         gw_table);
+
+  /* Priority 100: traffic from our subnet → upstream internet table */
   ret = ds_nl_add_rule4(ctx, subnet_be, prefix, 0, 0, gw_table, 100);
   if (ret == 0) {
-    ds_log("[NET] Android routing: added rule from %s lookup table %d prio 100",
+    ds_log("[NET] Android routing: rule from %s lookup table %d (prio 100)",
            DS_DEFAULT_SUBNET, gw_table);
+    /* Seed the monitor's current table so it knows the baseline */
+    pthread_mutex_lock(&g_gw_mutex);
+    g_current_gw_table = gw_table;
+    pthread_mutex_unlock(&g_gw_mutex);
   } else {
     ds_warn("[NET] Android routing: ds_nl_add_rule4 failed (ret=%d)", ret);
   }
@@ -364,10 +409,19 @@ int setup_veth_host_side(struct ds_config *cfg, pid_t child_pid) {
   }
   ds_log("[DEBUG] Successfully moved %s to PID %d", veth_peer, (int)child_pid);
 
-  /* 7. Android policy routing */
+  /* 7. Android policy routing — uses the user-declared upstream interfaces */
   if (is_android()) {
-    ds_net_setup_android_routing(ctx);
+    ds_net_setup_android_routing(ctx,
+                                 (const char (*)[IFNAMSIZ])cfg->upstream_ifaces,
+                                 cfg->upstream_iface_count);
   }
+
+  /* Cache the upstream list so ds_net_start_route_monitor() can access it.
+   * setup_veth_host_side() always runs before ds_net_start_route_monitor(). */
+  for (int _i = 0;
+       _i < cfg->upstream_iface_count && _i < DS_MAX_UPSTREAM_IFACES; _i++)
+    safe_strncpy(g_upstream_ifaces[_i], cfg->upstream_ifaces[_i], IFNAMSIZ);
+  g_upstream_count = cfg->upstream_iface_count;
 
   ds_nl_close(ctx);
 
@@ -550,17 +604,100 @@ int detect_ipv6_in_container(pid_t pid) {
 }
 
 /* ---------------------------------------------------------------------------
- * Dynamic Routing Monitor (Android Failover)
+ * Upstream Route Monitor
+ *
+ * Watches LINK state and IPv4 address changes on the user-declared upstream
+ * interfaces. When any change is detected that involves one of those
+ * interfaces, it re-scans to find which is currently active (RUNNING + has
+ * a default route) and atomically updates the policy rule.
+ *
+ * Event triggers:
+ *   RTM_NEWLINK / RTM_DELLINK — interface state change (UP/RUNNING/DOWN)
+ *   RTM_NEWADDR / RTM_DELADDR — IPv4 address assigned or removed
+ *
+ * 30-second heartbeat covers devices with broken netlink notifications.
  * ---------------------------------------------------------------------------*/
 
-static int g_current_gw_table = 0;
-static pthread_mutex_t g_gw_mutex = PTHREAD_MUTEX_INITIALIZER;
-static int g_route_monitor_sock = -1;
-static volatile sig_atomic_t g_stop_monitor = 0;
+/* Scan upstream interfaces in priority order; return the first that is
+ * RUNNING and has an IPv4 default route in any table. */
+static int find_active_upstream(ds_nl_ctx_t *ctx, char *iface_out,
+                                int *table_out) {
+  for (int i = 0; i < g_upstream_count; i++) {
+    if (!iface_is_running(g_upstream_ifaces[i]))
+      continue;
+    int tbl = 0;
+    if (ds_nl_get_iface_table(ctx, g_upstream_ifaces[i], &tbl) == 0) {
+      if (iface_out)
+        safe_strncpy(iface_out, g_upstream_ifaces[i], IFNAMSIZ);
+      if (table_out)
+        *table_out = tbl;
+      return 0;
+    }
+  }
+  return -ENOENT;
+}
+
+/* Re-probe which upstream is active and update the ip rule if needed. */
+static void do_upstream_reprobe(void) {
+  ds_nl_ctx_t *ctx = ds_nl_open();
+  if (!ctx)
+    return;
+
+  char new_iface[IFNAMSIZ] = {0};
+  int new_table = 0;
+
+  if (find_active_upstream(ctx, new_iface, &new_table) != 0) {
+    /* No upstream active yet — leave current rule in place */
+    ds_nl_close(ctx);
+    return;
+  }
+
+  pthread_mutex_lock(&g_gw_mutex);
+  int old_table = g_current_gw_table;
+  pthread_mutex_unlock(&g_gw_mutex);
+
+  if (new_table == old_table) {
+    ds_nl_close(ctx);
+    return;
+  }
+
+  ds_log("[NET] Route monitor: upstream switch table %d → %d (%s)", old_table,
+         new_table, new_iface);
+
+  uint32_t subnet_be, mask_be;
+  parse_cidr(DS_DEFAULT_SUBNET, &subnet_be, &mask_be);
+  (void)mask_be;
+
+  if (old_table > 0)
+    ds_nl_del_rule4(ctx, subnet_be, DS_NAT_PREFIX, 0, 0, old_table, 100);
+
+  if (ds_nl_add_rule4(ctx, subnet_be, DS_NAT_PREFIX, 0, 0, new_table, 100) ==
+      0) {
+    pthread_mutex_lock(&g_gw_mutex);
+    g_current_gw_table = new_table;
+    pthread_mutex_unlock(&g_gw_mutex);
+    ds_log("[NET] Route monitor: rule updated → from %s lookup %d (prio 100)",
+           DS_DEFAULT_SUBNET, new_table);
+  } else {
+    ds_warn("[NET] Route monitor: failed to install new rule for table %d",
+            new_table);
+  }
+
+  ds_nl_close(ctx);
+}
 
 static void *route_monitor_loop(void *arg) {
   (void)arg;
-  ds_log("[NET] Route monitor thread started");
+
+  /* Build a comma-separated list for the log line */
+  char iface_list[256] = {0};
+  for (int i = 0; i < g_upstream_count; i++) {
+    if (i > 0)
+      strncat(iface_list, ",", sizeof(iface_list) - strlen(iface_list) - 1);
+    strncat(iface_list, g_upstream_ifaces[i],
+            sizeof(iface_list) - strlen(iface_list) - 1);
+  }
+  ds_log("[NET] Upstream route monitor started (interfaces: %s)", iface_list);
 
   int sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
   if (sock < 0) {
@@ -572,15 +709,9 @@ static void *route_monitor_loop(void *arg) {
   struct sockaddr_nl sa;
   memset(&sa, 0, sizeof(sa));
   sa.nl_family = AF_NETLINK;
-  /* Subscribe to BOTH IPv4 route changes AND IPv4 policy-rule changes.
-   *
-   * Why both?  On Android MTK (and many Qualcomm devices) a WiFi ↔ mobile-data
-   * switch does NOT add/remove route-table entries — the per-interface default
-   * routes in table wlan0 / ccmni1 / v4-ccmni1 stay put.  What changes is the
-   * POLICY RULE set: Android deletes `lookup wlan0` rules and adds
-   * `lookup ccmni1` rules (or vice-versa).  Without RTMGRP_IPV4_RULE we never
-   * wake up for those transitions and the container loses internet. */
-  sa.nl_groups = RTMGRP_IPV4_ROUTE | RTMGRP_IPV4_RULE;
+  /* RTMGRP_LINK     — interface state changes (IFF_RUNNING, link up/down)
+   * RTMGRP_IPV4_IFADDR — IPv4 address add/remove on upstream interfaces */
+  sa.nl_groups = RTMGRP_LINK | RTMGRP_IPV4_IFADDR;
 
   if (bind(sock, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
     ds_warn("[NET] Route monitor: failed to bind netlink socket: %s",
@@ -589,56 +720,17 @@ static void *route_monitor_loop(void *arg) {
     return NULL;
   }
 
-  /* Store socket globally so we can close it from another thread to wake up
-   * recv() */
   pthread_mutex_lock(&g_gw_mutex);
   g_route_monitor_sock = sock;
   pthread_mutex_unlock(&g_gw_mutex);
-
-  /* Helper: re-probe for the active internet table and update the ip rule.
-   * parse_cidr requires a non-NULL mask pointer; _mask_be is intentionally
-   * unused after the call (we only need the subnet address). */
-#define DO_REPROBE()                                                           \
-  do {                                                                         \
-    ds_nl_ctx_t *_ctx = ds_nl_open();                                          \
-    if (_ctx) {                                                                \
-      char _gw_iface[IFNAMSIZ] = {0};                                          \
-      int _new_table = 0;                                                      \
-      if (ds_nl_get_default_gw_table(_ctx, _gw_iface, &_new_table) == 0) {     \
-        pthread_mutex_lock(&g_gw_mutex);                                       \
-        int _old_table = g_current_gw_table;                                   \
-        pthread_mutex_unlock(&g_gw_mutex);                                     \
-        if (_new_table != _old_table && _new_table > 100) {                    \
-          ds_log("[NET] Route monitor: network switch detected! "              \
-                 "Table %d -> %d (%s)",                                        \
-                 _old_table, _new_table, _gw_iface);                           \
-          uint32_t _subnet_be, _mask_be;                                       \
-          parse_cidr(DS_DEFAULT_SUBNET, &_subnet_be, &_mask_be);               \
-          (void)_mask_be;                                                      \
-          if (_old_table > 0)                                                  \
-            ds_nl_del_rule4(_ctx, _subnet_be, DS_NAT_PREFIX, 0, 0, _old_table, \
-                            100);                                              \
-          if (ds_nl_add_rule4(_ctx, _subnet_be, DS_NAT_PREFIX, 0, 0,           \
-                              _new_table, 100) == 0) {                         \
-            pthread_mutex_lock(&g_gw_mutex);                                   \
-            g_current_gw_table = _new_table;                                   \
-            pthread_mutex_unlock(&g_gw_mutex);                                 \
-          }                                                                    \
-        }                                                                      \
-      }                                                                        \
-      ds_nl_close(_ctx);                                                       \
-    }                                                                          \
-  } while (0)
 
   uint8_t buf[8192];
   struct pollfd pfd = {.fd = sock, .events = POLLIN};
 
   while (!g_stop_monitor) {
-    /* 5-second timeout: catch any netlink event we might have missed.
-     * Last-resort safety net for devices that use non-standard
-     * network-switching paths (vendor RIL, custom kernel patches, etc.)
-     * that don't reliably send RTMGRP_IPV4_RULE notifications. */
-    int pr = poll(&pfd, 1, 5000);
+    /* 30-second heartbeat: last resort for devices with broken netlink
+     * notifications (some vendor kernels suppress IFADDR/LINK events). */
+    int pr = poll(&pfd, 1, 30000);
     if (pr < 0) {
       if (g_stop_monitor)
         break;
@@ -648,8 +740,7 @@ static void *route_monitor_loop(void *arg) {
     }
 
     if (pr == 0) {
-      /* Timeout-driven periodic probe */
-      DO_REPROBE();
+      do_upstream_reprobe();
       continue;
     }
 
@@ -662,55 +753,60 @@ static void *route_monitor_loop(void *arg) {
       break;
     }
 
+    int should_reprobe = 0;
     struct nlmsghdr *h = (struct nlmsghdr *)buf;
-    int refreshed = 0;
 
     for (; NLMSG_OK(h, (uint32_t)len); h = NLMSG_NEXT(h, len)) {
       if (h->nlmsg_type == NLMSG_DONE || h->nlmsg_type == NLMSG_ERROR)
         break;
 
-      int should_reprobe = 0;
-
-      if (h->nlmsg_type == RTM_NEWROUTE || h->nlmsg_type == RTM_DELROUTE) {
-        /* IPv4 default-route change */
-        struct rtmsg *r = NLMSG_DATA(h);
-        if (r->rtm_family == AF_INET && r->rtm_dst_len == 0)
-          should_reprobe = 1;
-      } else if (h->nlmsg_type == RTM_NEWRULE || h->nlmsg_type == RTM_DELRULE) {
-        /* Policy-rule change: primary trigger on Android MTK/Qualcomm.
-         * When the device switches networks, Android adds/removes `ip rule`
-         * entries rather than touching the route tables themselves. */
-        struct rtmsg *r = NLMSG_DATA(h);
-        if (r->rtm_family == AF_INET)
-          should_reprobe = 1;
+      if (h->nlmsg_type == RTM_NEWLINK || h->nlmsg_type == RTM_DELLINK) {
+        /* Filter: only care about events on our upstream interfaces */
+        struct ifinfomsg *ifi = NLMSG_DATA(h);
+        char evname[IFNAMSIZ] = {0};
+        if_indextoname((unsigned int)ifi->ifi_index, evname);
+        for (int i = 0; i < g_upstream_count; i++) {
+          if (strcmp(evname, g_upstream_ifaces[i]) == 0) {
+            should_reprobe = 1;
+            break;
+          }
+        }
+      } else if (h->nlmsg_type == RTM_NEWADDR || h->nlmsg_type == RTM_DELADDR) {
+        struct ifaddrmsg *ifa = NLMSG_DATA(h);
+        if (ifa->ifa_family == AF_INET) {
+          char evname[IFNAMSIZ] = {0};
+          if_indextoname((unsigned int)ifa->ifa_index, evname);
+          for (int i = 0; i < g_upstream_count; i++) {
+            if (strcmp(evname, g_upstream_ifaces[i]) == 0) {
+              should_reprobe = 1;
+              break;
+            }
+          }
+        }
       }
 
-      if (should_reprobe && !refreshed) {
-        DO_REPROBE();
-        refreshed = 1;
-      }
+      if (should_reprobe)
+        break;
     }
-  }
 
-#undef DO_REPROBE
+    if (should_reprobe)
+      do_upstream_reprobe();
+  }
 
   pthread_mutex_lock(&g_gw_mutex);
   close(sock);
   g_route_monitor_sock = -1;
   pthread_mutex_unlock(&g_gw_mutex);
 
-  ds_log("[NET] Route monitor thread stopped");
+  ds_log("[NET] Upstream route monitor stopped");
   return NULL;
 }
 
 void ds_net_stop_route_monitor(void) {
   g_stop_monitor = 1;
   pthread_mutex_lock(&g_gw_mutex);
-  if (g_route_monitor_sock >= 0) {
-    /* Shutdown triggers recv() to return with an error or 0, waking the
-     * thread */
+  if (g_route_monitor_sock >= 0)
     shutdown(g_route_monitor_sock, SHUT_RDWR);
-  }
   pthread_mutex_unlock(&g_gw_mutex);
 }
 
@@ -718,14 +814,9 @@ void ds_net_start_route_monitor(void) {
   if (!is_android())
     return;
 
-  /* Capture initial table before starting thread */
-  ds_nl_ctx_t *ctx = ds_nl_open();
-  if (ctx) {
-    char dummy[IFNAMSIZ];
-    pthread_mutex_lock(&g_gw_mutex);
-    ds_nl_get_default_gw_table(ctx, dummy, &g_current_gw_table);
-    pthread_mutex_unlock(&g_gw_mutex);
-    ds_nl_close(ctx);
+  if (g_upstream_count == 0) {
+    ds_warn("[NET] Route monitor: no upstream interfaces defined, skipping");
+    return;
   }
 
   g_stop_monitor = 0;
@@ -735,9 +826,8 @@ void ds_net_start_route_monitor(void) {
   pthread_attr_init(&attr);
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
-  if (pthread_create(&tid, &attr, route_monitor_loop, NULL) != 0) {
+  if (pthread_create(&tid, &attr, route_monitor_loop, NULL) != 0)
     ds_warn("[NET] Failed to start route monitor thread: %s", strerror(errno));
-  }
 
   pthread_attr_destroy(&attr);
 }

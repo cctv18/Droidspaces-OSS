@@ -237,6 +237,75 @@ int ds_config_load(const char *config_path, struct ds_config *cfg) {
             val);
         cfg->net_mode = DS_NET_HOST;
       }
+    } else if (strcmp(key, "upstream_interfaces") == 0) {
+      /* Comma-separated interface names, e.g. "wlan0,rmnet0,ccmni1" */
+      char copy[1024];
+      safe_strncpy(copy, val, sizeof(copy));
+      char *up_saveptr;
+      char *up_tok = strtok_r(copy, ",", &up_saveptr);
+      while (up_tok && cfg->upstream_iface_count < DS_MAX_UPSTREAM_IFACES) {
+        while (*up_tok == ' ' || *up_tok == '\t')
+          up_tok++;
+        char *up_end = up_tok + strlen(up_tok) - 1;
+        while (up_end > up_tok && (*up_end == ' ' || *up_end == '\t'))
+          *up_end-- = '\0';
+        if (up_tok[0] && strlen(up_tok) < IFNAMSIZ) {
+          int dup = 0;
+          for (int i = 0; i < cfg->upstream_iface_count; i++) {
+            if (strcmp(cfg->upstream_ifaces[i], up_tok) == 0) {
+              dup = 1;
+              break;
+            }
+          }
+          if (!dup) {
+            safe_strncpy(cfg->upstream_ifaces[cfg->upstream_iface_count++],
+                         up_tok, IFNAMSIZ);
+          }
+        }
+        up_tok = strtok_r(NULL, ",", &up_saveptr);
+      }
+    } else if (strcmp(key, "port_forwards") == 0) {
+      /* Comma-separated HOST:CONTAINER[/proto], e.g. "22:22/tcp,8096:8096" */
+      char copy[1024];
+      safe_strncpy(copy, val, sizeof(copy));
+      char *pf_saveptr;
+      char *pf_tok = strtok_r(copy, ",", &pf_saveptr);
+      while (pf_tok && cfg->port_forward_count < DS_MAX_PORT_FORWARDS) {
+        while (*pf_tok == ' ' || *pf_tok == '\t')
+          pf_tok++;
+        struct ds_port_forward *pf =
+            &cfg->port_forwards[cfg->port_forward_count];
+        strncpy(pf->proto, "tcp", sizeof(pf->proto));
+        char *slash = strchr(pf_tok, '/');
+        if (slash) {
+          *slash = '\0';
+          strncpy(pf->proto, slash + 1, sizeof(pf->proto) - 1);
+          pf->proto[sizeof(pf->proto) - 1] = '\0';
+        }
+        char *colon = strchr(pf_tok, ':');
+        if (colon) {
+          *colon = '\0';
+          int hp = atoi(pf_tok);
+          int cp = atoi(colon + 1);
+          if (hp > 0 && hp <= 65535 && cp > 0 && cp <= 65535) {
+            int dup = 0;
+            for (int i = 0; i < cfg->port_forward_count; i++) {
+              if (cfg->port_forwards[i].host_port == (uint16_t)hp &&
+                  cfg->port_forwards[i].container_port == (uint16_t)cp &&
+                  strcmp(cfg->port_forwards[i].proto, pf->proto) == 0) {
+                dup = 1;
+                break;
+              }
+            }
+            if (!dup) {
+              pf->host_port = (uint16_t)hp;
+              pf->container_port = (uint16_t)cp;
+              cfg->port_forward_count++;
+            }
+          }
+        }
+        pf_tok = strtok_r(NULL, ",", &pf_saveptr);
+      }
     } else {
       /* Preservation: Capture unknown key-value pairs for Android metadata */
       add_unknown_line(cfg, line);
@@ -327,6 +396,26 @@ int ds_config_save(const char *config_path, struct ds_config *cfg) {
     fprintf(f_out, "net_mode=none\n");
   } else {
     fprintf(f_out, "net_mode=host\n");
+  }
+
+  /* NAT-mode extras: upstream interfaces and port forwards */
+  if (cfg->net_mode == DS_NET_NAT && cfg->upstream_iface_count > 0) {
+    fprintf(f_out, "upstream_interfaces=");
+    for (int i = 0; i < cfg->upstream_iface_count; i++) {
+      fprintf(f_out, "%s%s", cfg->upstream_ifaces[i],
+              (i < cfg->upstream_iface_count - 1) ? "," : "");
+    }
+    fprintf(f_out, "\n");
+  }
+
+  if (cfg->net_mode == DS_NET_NAT && cfg->port_forward_count > 0) {
+    fprintf(f_out, "port_forwards=");
+    for (int i = 0; i < cfg->port_forward_count; i++) {
+      fprintf(f_out, "%d:%d/%s%s", cfg->port_forwards[i].host_port,
+              cfg->port_forwards[i].container_port, cfg->port_forwards[i].proto,
+              (i < cfg->port_forward_count - 1) ? "," : "");
+    }
+    fprintf(f_out, "\n");
   }
 
   if (cfg->env_file[0])
