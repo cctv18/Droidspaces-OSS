@@ -1097,6 +1097,10 @@ int ds_ipt_add_portforwards(struct ds_config *cfg, const char *container_ip) {
       container_ip[0] == '\0')
     return 0;
 
+  /* Probe once before the loop — avoids reopening /proc/net/ip_tables_matches
+   * for every port forward entry. */
+  int use_addrtype = addrtype_available();
+
   for (int i = 0; i < cfg->port_forward_count; i++) {
     struct ds_port_forward *pf = &cfg->port_forwards[i];
 
@@ -1113,7 +1117,6 @@ int ds_ipt_add_portforwards(struct ds_config *cfg, const char *container_ip) {
      * destined for the phone itself — prevents hijacking hotspot client flows.
      * Fallback: omit addrtype on kernels where xt_addrtype is absent (common
      * on Android 4.14 and below). The rule is broader but still functional. */
-    int use_addrtype = addrtype_available();
     int dnat_ok = 0;
 
     if (use_addrtype) {
