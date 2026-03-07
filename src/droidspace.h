@@ -59,7 +59,7 @@
  * ---------------------------------------------------------------------------*/
 
 #define DS_PROJECT_NAME "Droidspaces"
-#define DS_VERSION "5.1.1"
+#define DS_VERSION "5.1.2"
 #define DS_MIN_KERNEL_MAJOR 3
 #define DS_MIN_KERNEL_MINOR 18
 #define DS_RECOMMENDED_KERNEL_MAJOR 4
@@ -202,8 +202,8 @@ struct ds_config_line {
 };
 
 /* Terminal/TTY info — one per allocated PTY */
- 
- struct ds_tty_info {
+
+struct ds_tty_info {
   int master;          /* master fd (stays in parent/monitor) */
   int slave;           /* slave fd (bind-mounted into container) */
   char name[PATH_MAX]; /* slave device path (e.g. /dev/pts/3) */
