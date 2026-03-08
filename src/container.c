@@ -514,48 +514,34 @@ int start_rootfs(struct ds_config *cfg) {
 
     /* Adaptive Cgroup Namespace (introduced in Linux 4.6).
      *
-     * CRITICAL: Only enable cgroupns on kernels >= 5.2 where the cgroupv2
-     * cpu/io/memory controllers are complete.  On kernels like 4.14, the
-     * cgroupns syscall SUCCEEDS (kernel has 4.6+ cgroupns support) but the
-     * container ends up isolated inside a namespace where it cannot create
-     * NEW named v1 hierarchies (e.g. "none,name=systemd") — the kernel
-     * returns EPERM.  This is the exact same situation as kernel 4.4 which
-     * has no cgroupns support at all: both end up running setup_cgroups() in
-     * the host cgroupns with full rights, which is what we want.
-     *
-     * Gating on >= 5.2 reproduces the 4.4 "no cgroupns" behaviour on all
-     * legacy kernels without any special-casing in setup_cgroups(). */
-    if (access("/proc/self/ns/cgroup", F_OK) == 0) {
-      int _major = 0, _minor = 0;
-      int _cg_ns_ok = (get_kernel_version(&_major, &_minor) == 0 &&
-                       (_major > 5 || (_major == 5 && _minor >= 2)));
+     * STRICT SEPARATION: Only enable cgroupns on kernels >= 5.2 (Pure V2).
+     * On kernels < 5.2 (Pure V1), we skip cgroupns to ensure setup_cgroups()
+     * has full rights to create named V1 hierarchies from the host context. */
+    if (access("/proc/self/ns/cgroup", F_OK) == 0 && ds_cgroup_v2_usable()) {
+      /* To get isolation from a cgroup namespace, we must be in a sub-cgroup
+       * BEFORE we unshare. If we are in the root '/', the namespace root
+       * will be the host's root, providing zero isolation.
+       * We use a container-specific path to avoid conflicts. */
+      if (access("/sys/fs/cgroup/cgroup.procs", F_OK) == 0) {
+        char cg_path[PATH_MAX];
+        snprintf(cg_path, sizeof(cg_path), "/sys/fs/cgroup/droidspaces/%s",
+                 cfg->container_name);
+        mkdir_p(cg_path, 0755);
 
-      if (_cg_ns_ok) {
-        /* To get isolation from a cgroup namespace, we must be in a sub-cgroup
-         * BEFORE we unshare. If we are in the root '/', the namespace root
-         * will be the host's root, providing zero isolation.
-         * We use a container-specific path to avoid conflicts. */
-        if (access("/sys/fs/cgroup/cgroup.procs", F_OK) == 0) {
-          char cg_path[PATH_MAX];
-          snprintf(cg_path, sizeof(cg_path), "/sys/fs/cgroup/droidspaces/%s",
-                   cfg->container_name);
-          mkdir_p(cg_path, 0755);
-
-          char cg_procs[PATH_MAX];
-          safe_strncpy(cg_procs, cg_path, sizeof(cg_procs));
-          strncat(cg_procs, "/cgroup.procs",
-                  sizeof(cg_procs) - strlen(cg_procs) - 1);
-          FILE *f = fopen(cg_procs, "we");
-          if (f) {
-            fprintf(f, "%d\n", getpid());
-            fclose(f);
-          }
+        char cg_procs[PATH_MAX];
+        safe_strncpy(cg_procs, cg_path, sizeof(cg_procs));
+        strncat(cg_procs, "/cgroup.procs",
+                sizeof(cg_procs) - strlen(cg_procs) - 1);
+        FILE *f = fopen(cg_procs, "we");
+        if (f) {
+          fprintf(f, "%d\n", getpid());
+          fclose(f);
         }
-        ns_flags |= CLONE_NEWCGROUP;
-      } else {
-        /* Legacy kernel — skip cgroupns, run in host cgroupns with full
-         * rights so setup_cgroups() can create named v1 hierarchies. */
       }
+      ns_flags |= CLONE_NEWCGROUP;
+    } else {
+      /* Legacy kernel — skip cgroupns, run in host cgroupns with full
+       * rights so setup_cgroups() can create named v1 hierarchies. */
     }
 
     if (unshare(ns_flags) < 0)

@@ -214,22 +214,11 @@ static int is_cgroup_ns_active(void) {
  * for systemd. The cpu/io/memory v2 controllers only became usable in 5.2.
  * On kernels like Android 4.14, cgroup2 mounts SUCCEED but the controllers
  * are absent — systemd probes them and falls apart. */
-static int cgroupv2_usable(void) {
+int ds_cgroup_v2_usable(void) {
   int major = 0, minor = 0;
   if (get_kernel_version(&major, &minor) != 0)
     return 0; /* unknown kernel — assume unusable, safe default */
   return (major > 5 || (major == 5 && minor >= 2));
-}
-
-/* Returns 1 if the HOST's /sys/fs/cgroup is a pure cgroupv2 root.
- * At setup_cgroups() time CWD is the container rootfs but /sys/fs/cgroup
- * (absolute path) still refers to the HOST mount — we haven't pivot_root'd.
- * This is exactly how LXC detects the host layout. */
-static int host_is_cgroupv2_root(void) {
-  struct statfs sfs;
-  if (statfs("/sys/fs/cgroup", &sfs) != 0)
-    return 0;
-  return (unsigned long)sfs.f_type == (unsigned long)CGROUP2_SUPER_MAGIC;
 }
 
 int setup_cgroups(int is_systemd) {
@@ -247,20 +236,18 @@ int setup_cgroups(int is_systemd) {
   int n = get_host_cgroups(hosts, 32);
 
   int in_ns = is_cgroup_ns_active();
-  /* Determine host layout and kernel capability ONCE before the loop.
-   * v2_ok: kernel has complete cgroupv2 controllers (>= 5.2).
-   * is_pure_v2: host root IS cgroup2 AND kernel can use it.
-   * If v2_ok is false we skip all cgroup2 entries — mounting them would
-   * succeed on 4.14+ but leave systemd with broken/empty controllers. */
-  int v2_ok = cgroupv2_usable();
-  int is_pure_v2 = host_is_cgroupv2_root() && v2_ok;
+  int v2_ok = ds_cgroup_v2_usable();
   int systemd_setup_done = 0;
 
   for (int i = 0; i < n; i++) {
-    /* Skip cgroup2 entries on kernels where v2 controllers are incomplete.
-     * This prevents systemd from seeing a half-baked cgroup2 and trying to
-     * use it (which is the root cause of the "messed up hierarchy" on 4.14). */
-    if (hosts[i].version == 2 && !v2_ok)
+    /* STRICT SEPARATION:
+     * - If Kernel < 5.2  -> Only use Cgroup V1 (skip V2).
+     * - If Kernel >= 5.2 -> Only use Cgroup V2 (skip V1).
+     * This avoids hybrid cgroup "collab" which causes messy hierarchies
+     * and systemd confusion on modern distros. */
+    if (v2_ok && hosts[i].version == 1)
+      continue;
+    if (!v2_ok && hosts[i].version == 2)
       continue;
 
     char container_mp[PATH_MAX];
@@ -390,8 +377,10 @@ int setup_cgroups(int is_systemd) {
   }
 
   /* 2. FORCED SYSTEMD SUPPORT: If we are booting a systemd rootfs but no
-   * systemd hierarchy was found on the host, we MUST create one manually. */
-  if (is_systemd && !systemd_setup_done && !is_pure_v2) {
+   * systemd hierarchy was found on the host, we MUST create one manually.
+   * On kernels >= 5.2, we are in Pure V2 mode so we never mount the legacy
+   * V1 systemd hierarchy. */
+  if (is_systemd && !systemd_setup_done && !v2_ok) {
     mkdir("sys/fs/cgroup/systemd", 0755);
     if (mount("cgroup", "sys/fs/cgroup/systemd", "cgroup",
               MS_NOSUID | MS_NODEV | MS_NOEXEC, "none,name=systemd") < 0) {
@@ -408,23 +397,10 @@ int setup_cgroups(int is_systemd) {
     return -1;
   }
 
-  /* Final isolation: Remount /sys/fs/cgroup as Read-Only.
-   *
-   * Pure v2: NEVER remount RO — systemd needs write access to create scopes
-   * at the unified root.
-   *
-   * Modern v1/hybrid (kernel >= 5.2, cgroupns active): remount the base tmpfs
-   * RO. Sub-mounts remain RW inside the cgroupns. The RO base signals to
-   * systemd 258+ that it is running inside a container.
-   *
-   * Legacy v1 (kernel < 5.2, no cgroupns): NEVER remount RO. Systemd needs
-   * the base tmpfs RW to create controller alias symlinks for Android-renamed
-   * hierarchies (e.g. cpu->cpuctl, cpuacct->acct). The v2_ok gate matches
-   * the same threshold used in container.c. */
-  if (!is_pure_v2 && v2_ok) {
-    mount(NULL, "sys/fs/cgroup", NULL,
-          MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL);
-  }
+  /* Final isolation: Both Pure V2 and Legacy V1 environments stay Read-Write.
+   * - Systemd-v2 needs write access to the root to manage scopes.
+   * - Systemd-v1/OpenRC needs write access to create controller symlinks.
+   * The "Hybrid-RO" middle-ground is now removed. */
 
   return 0;
 }

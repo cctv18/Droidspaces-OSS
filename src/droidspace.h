@@ -398,6 +398,7 @@ int is_binfmt_misc_supported(void);
  * cgroup.c
  * ---------------------------------------------------------------------------*/
 
+int ds_cgroup_v2_usable(void);
 int setup_cgroups(int is_systemd);
 int ds_cgroup_attach(pid_t target_pid);
 
