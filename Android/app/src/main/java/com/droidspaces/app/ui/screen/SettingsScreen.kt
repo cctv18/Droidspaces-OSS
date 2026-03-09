@@ -318,6 +318,7 @@ fun SettingsScreen(
             )
 
             Spacer(modifier = Modifier.height(16.dp))
+
         }
     }
 
@@ -475,7 +476,7 @@ private fun AboutDialog(onDismiss: () -> Unit) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/SamsungTweaks"))
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/Droidspaces"))
                             context.startActivity(intent)
                         },
                     verticalAlignment = Alignment.CenterVertically,
@@ -503,6 +504,40 @@ private fun AboutDialog(onDismiss: () -> Unit) {
                 Spacer(modifier = Modifier.height(4.dp))
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(4.dp))
+                // Source Code row
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/ravindu644/Droidspaces-OSS"))
+                            context.startActivity(intent)
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Code,
+                        contentDescription = null,
+                        modifier = Modifier.size(24.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = context.getString(R.string.source_code),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                        contentDescription = context.getString(R.string.source_code),
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(4.dp))
+
                 // Contributors
                 Text(
                     text = context.getString(R.string.contributors),
