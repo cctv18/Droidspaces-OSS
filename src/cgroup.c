@@ -197,7 +197,7 @@ int ds_cgroup_v2_usable(void) {
 
 /* Returns 1 if the HOST's /sys/fs/cgroup is a pure cgroupv2 root.
  * Checked before pivot_root so /sys/fs/cgroup still refers to the host mount.
- * Public so main.c can validate --force-cgroupv2 before launch. */
+ * Public so main.c can validate --force-cgroupv1 before launch. */
 int ds_cgroup_host_is_v2(void) {
   struct statfs sfs;
   if (statfs("/sys/fs/cgroup", &sfs) != 0)

@@ -25,15 +25,23 @@ Common issues, their causes, and how to fix them.
 <a id="modern-distros"></a>
 ## Modern Distros (Arch, Fedora, etc.) Failure on Legacy Kernels
 
-This is not a bug with Droidspaces; it is a limitation of the specific distribution's `systemd` version. Modern distributions like Arch Linux, Fedora, or OpenSUSE use very recent versions of `systemd` that require kernel features missing in older versions. On legacy kernels (3.18, 4.4, 4.9, 4.14, 4.19), these distros will either fail to boot with an "Unsupported Kernel" message in the foreground boot screen or crash during initialization.
+This is not a bug in Droidspaces; it is a limitation of the distribution's `systemd` version. Modern distributions like Arch Linux, Fedora, or openSUSE use recent versions of `systemd` (v258 and newer) that require kernel features missing in older versions. On legacy kernels (3.18, 4.4, 4.9, 4.14, 4.19), these distros will either fail to boot with an "Unsupported Kernel" message, crash during initialization, or appear to hang when executing `systemctl` commands.
 
-**Cause:** The host kernel is too old to support the cgroup and namespace requirements of modern `systemd`.
+Systemd's development philosophy increasingly targets modern Linux environments. Starting with v258 (released in September 2025), the codebase was purged of many legacy workarounds and backward-compatibility layers intended for pre-5.4 kernels.
+
+Specifically, developers removed old capability checks, deprecated fallback mechanisms, and deleted obsolete D-Bus methods.
+
+By removing these fallbacks, modern `systemd` assumes modern kernel APIs are present. When they are not (as in legacy kernels), it hard-fails rather than degrading gracefully.
+
+**Cause:** The host kernel is too old to support modern syscalls and features required by newer `systemd` versions.
+
+Legacy kernels lack modern system calls (e.g., `clone3`, `openat2`, or newer `bpf` hooks) that `systemd` now utilizes by default. When `systemd` invokes a syscall that a 4.14 or 4.19 kernel doesn't recognize, the kernel rejects it, leading to a failure.
 
 **Solution:**
-- Use **Alpine Linux** (extremely stable on legacy kernels).
-- Use **Ubuntu 22.04 LTS** (extensively tested and stable on Android kernels as old as 4.14).
+- Use any container that utilizes **OpenRC**, **runit**, or **s6** as its init system.
+- Use distributions with `systemd` versions older than v258, such as **Ubuntu 22.04**, **Ubuntu 24.04**, **Ubuntu 25.04**, or **Ubuntu 25.10 (which uses v257.9 as of March 2026)**.
+- Use **Debian 12 (Bookworm)** or **Debian 13 (Trixie)**.
 
-**Warning:** Using Distros newer than Ubuntu 22.04-era (e.g., 24.04) on legacy kernels often results in buggy cgroup hierarchies, resource leaks, kernel panics, or `rootfs.img` corruption.
 
 ---
 
@@ -313,26 +321,10 @@ With `--hw-access` enabled, Droidspaces **automatically** creates GPU groups and
 
 **Symptoms**: Container starts in NAT mode but has no internet access, even with correct `--upstream` interfaces. `ping 8.8.8.8` fails inside the container.
 
-**Cause**: Droidspaces NAT mode currently supports **IPv4 only**. If your upstream interface (e.g., `rmnet_data0`) does not have an assigned IPv4 address (common with certain ISPs that use IPv6-only APNs/networks), NAT will fail.
+**Cause**: Droidspaces NAT mode currently supports **IPv4 only**. If your upstream interface (e.g., `rmnet_data0`) does not have an assigned IPv4 address (common with certain ISPs that use IPv6-only APNs/networks), NAT will fail. Additionally, some mobile data interfaces may change names (e.g., `rmnet_data0` vs `rmnet_data1`) upon reconnection.
 
-**Workaround: Forcing IPv4 Connection (Android Root Shell)**
-If your carrier is only providing an IPv6 address, you can often "trick" it into assigning an IPv4 address by temporarily disabling IPv6 globally:
-
-1.  **Preparation**: Turn off Mobile Data and enable **Airplane Mode**.
-2.  **Disable IPv6**: Run these commands in an Android root shell (or Termux with `su`):
-    ```bash
-    sysctl -w net.ipv6.conf.all.disable_ipv6=1
-    sysctl -w net.ipv6.conf.default.disable_ipv6=1
-    ```
-3.  **Reconnect**: Turn off Airplane Mode and re-enable Mobile Data.
-4.  **Verify**: Check if an interface with a default route appears:
-    ```bash
-    ip route show default
-    ```
-5.  **Configure**: Use the discovered interface in your Droidspaces `--upstream` configuration.
-
-> [!NOTE]
-> These settings will reset after a device reboot.
+**Tip: Using Wildcards**  
+To handle unpredictable interface names on mobile data, you can use wildcards in your `--upstream` configuration (e.g., `--upstream "rmnet_data*,wlan0"`). Droidspaces will automatically monitor and match any active interface that fits the pattern - in real time.
 
 ---
 

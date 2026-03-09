@@ -73,11 +73,10 @@ void print_usage(void) {
   printf("      --reset               Reset config to defaults (keeps "
          "name/rootfs)\n");
   printf(
-      "      --force-cgroupv2      Use cgroupv2 even on kernels < 5.2.\n"
-      "                            Allows modern systemd on legacy kernels\n"
-      "                            that have cgroupv2 mounted but incomplete\n"
-      "                            controllers. May cause instability.\n"
-      "                            No-op if host lacks cgroupv2 support.\n");
+      "      --force-cgroupv1      Force legacy cgroup v1 hierarchy even if\n"
+      "                            v2 is available on the host. Useful if\n"
+      "                            modern cgroup v2 setup leads to stability\n"
+      "                            issues on legacy Android kernels.\n");
   printf("  --help                    Show this help message\n\n");
 
   printf(C_BOLD "Examples:" C_RESET "\n");

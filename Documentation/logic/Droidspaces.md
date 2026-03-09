@@ -138,6 +138,7 @@ epoll, signalfd, PTY/devpts support, loop device, ext4 — all tested serially i
 - The host is Android (detected via `ANDROID_ROOT` env var or `/system/bin/app_process`) or standard Linux
 - The rootfs contains `/sbin/init` (systemd or openrc)
 - The rootfs contains `/etc/os-release` for auto-naming
+- **Distribution Compatibility**: On legacy kernels (3.18-4.19), containers must use a distribution with `systemd` older than v258 (e.g., Ubuntu 22.04 through 25.10). Modern `systemd` v258+ hard-fails on these kernels due to the removal of legacy compatibility layers and reliance on modern syscalls like `clone3`.
 
 ---
 
@@ -415,6 +416,7 @@ Droidspaces v4.0.0 uses a "data-driven" cgroup strategy ported from LXC:
     - **Modern (NS active)**: Directly mounts `cgroup`/`cgroup2` FS. The kernel-managed namespace provides the isolation.
     - **Legacy (No NS)**: Manually bind-mounts the process's specific cgroup subtree from the host into the container's hierarchy.
 - **Systemd Compatibility**: Replicates comounted v1 controllers (e.g., `cpu,cpuacct`) and creates symlinks for secondary names.
+- **Legacy Escape Hatch (`--force-cgroupv1`)**: On certain kernels, the host may report a "Hybrid" or "V2-Ready" state that lacks essential controllers needed by `systemd`. This flag bypasses V2 detection and forces the legacy V1 hierarchy, providing a critical troubleshooting safety net.
 - **Pure V2 Protection**: Detects if the host is pure cgroup v2; if so, it skips the Read-Only remount of `/sys/fs/cgroup` to ensure `systemd` can create its own scopes.
 
 **Step 13 — Optional: Android storage bind mount:**
@@ -1108,7 +1110,7 @@ Android does not use a single default route. Every interface (`wlan0`, `rmnet_da
 
 Old approach (auto-detection): Parse `ip rule` output to guess which table was "active". Completely unreliable on MTK/Qualcomm where both interfaces have rules of equal priority.
 
-**Current approach**: The user explicitly declares which interfaces can carry upstream traffic via `--upstream wlan0,rmnet_data0`. This list is mandatory for `--net=nat`.
+**Current approach**: The user explicitly declares which interfaces can carry upstream traffic via `--upstream wlan0,rmnet_data0`. This list is mandatory for `--net=nat`. **Wildcards are supported** (e.g., `rmnet*`, `v4-rmnet_data*`), allowing Droidspaces to match any active interface that fits the pattern using standard glob matching (`fnmatch`) during the route monitor's reprobe cycle.
 
 On Android, after moving the peer veth into the container netns, `ds_net_setup_android_routing()` runs:
 

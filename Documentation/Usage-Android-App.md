@@ -36,6 +36,9 @@ If you select **NAT (Isolated)** mode, you **must** specify one or more upstream
 2. **Detect Mobile Data**: Disable Wi-Fi and connect to mobile data. Press the refresh button again and select the mobile data interface (e.g., `rmnet0`, `ccmni1`).
 3. **Save**: Both interfaces will now be used by the Route Monitor to keep your container connected as you switch networks.
 
+> [!TIP]
+> You can manually enter wildcards in the Upstream Interfaces list (e.g., `rmnet*`) to ensure connectivity even if your carrier cycles through different interface names (like `rmnet_data0` and `rmnet_data1`).
+
 > [!NOTE]
 > NAT mode is IPv4 only. If your carrier only provides IPv6, see the [IPv4 NAT Workaround](Troubleshooting.md#ipv4-quirks).
 

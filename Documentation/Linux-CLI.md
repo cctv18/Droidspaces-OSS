@@ -98,14 +98,15 @@ sudo droidspaces --name=web,db,app stop
 | `--pidfile=PATH` | `-p` | Custom path for the PID file. Mutually exclusive with `--name`. |
 | `--hostname=NAME` | `-h` | Set the container's hostname. Defaults to the container name. |
 | `--conf=PATH` | `-C` | Load container configuration directly from a config file. |
-| `--reset` | | Reset container config to defaults (preserves name, rootfs path, and unrecognized config lines like Android UI metadata). Apply overrides on top. |
+| `--force-cgroupv1` | | Force legacy Cgroup V1 hierarchy. Required if the host kernel has a broken or partial Cgroups V2 implementation (common on older Android 4.x kernels). |
+| `--reset` | | Reset container config to defaults (preserves name, rootfs path). |
 
 ### Networking
 
 | Option | Short | Description |
 |--------|-------|-------------|
 | `--net=MODE` | | Networking mode: `host` (default), `nat`, or `none`. |
-| `--upstream IFACE[,..]` | | Upstream internet interface(s) for NAT mode (e.g., `wlan0,rmnet0`). **Mandatory for NAT**. |
+| `--upstream IFACE[,..]` | | Upstream internet interface(s) for NAT mode (e.g., `wlan0,rmnet0`). Wildcards are supported (e.g., `rmnet*`, `v4-rmnet_data*`). **Mandatory for NAT**. |
 | `--port HOST:CONT[/proto]` | | Forward host port to container (NAT mode). Supports TCP/UDP. |
 | `--dns=SERVERS` | `-d` | Custom DNS servers, comma-separated. Example: `--dns=1.1.1.1,8.8.8.8` |
 | `--enable-ipv6` | | Enable IPv6 networking support (Host mode only). |

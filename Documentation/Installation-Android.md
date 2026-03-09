@@ -31,7 +31,7 @@ You don't need to manually extract rootfs files. The app handles it:
 4. **Choose your Tarball**: Select the downloaded `.tar.xz` or `.tar.gz` file.
 5. **Configuration Wizard**:
    - **Name**: Give your container a friendly name.
-   - **Features**: Toggle Hardware Access, IPv6, or Android Storage integration.
+   - **Features**: Toggle Hardware Access, IPv6, Network Isolation, or Android Storage integration.
    - **Container Type**: We recommend **Sparse Image** for better performance and stability on Android’s f2fs storage.
 6. **Installation**: The app will extract the tarball and apply **Post-Extraction Fixes** automatically (DNS, Network Metrics, and Safe Udev).
 

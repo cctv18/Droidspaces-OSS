@@ -26,7 +26,7 @@ This guide explains how to compile a Linux kernel with Droidspaces support for A
 <a id="overview"></a>
 ## Overview
 
-Droidspaces requires specific kernel configuration options to create isolated containers. These options enable Linux namespaces, cgroups, seccomp filtering, and device filesystem support.
+Droidspaces requires specific kernel configuration options to create isolated containers. These options enable Linux namespaces, cgroups, seccomp filtering, networking and device filesystem support.
 
 The configuration requirements are the same for all kernel versions. The difference between non-GKI and GKI devices is in how the kernel is compiled and deployed.
 
@@ -38,7 +38,7 @@ The configuration requirements are the same for all kernel versions. The differe
 Save this block as `droidspaces.config` and place it under your kernel's architecture configs folder (e.g., `arch/arm64/configs/`):
 
 ```makefile
-# Minimal Droidspaces Support
+# Kernel configurations for full DroidSpaces support
 # Copyright (C) 2026 ravindu644 <droidcasts@protonmail.com>
 
 # IPC mechanisms (required for tools that rely on shared memory and IPC namespaces)
@@ -74,6 +74,48 @@ CONFIG_FW_LOADER=y
 CONFIG_FW_LOADER_USER_HELPER=y
 CONFIG_FW_LOADER_COMPRESS=y
 
+# Droidspaces Network Isolation Support - NAT/none modes
+# Network namespace isolation
+CONFIG_NET_NS=y
+
+# Virtual ethernet pairs
+CONFIG_VETH=y
+
+# Bridge device
+CONFIG_BRIDGE=y
+
+# Netfilter core
+CONFIG_NETFILTER=y
+CONFIG_NETFILTER_ADVANCED=y
+
+# Connection tracking
+CONFIG_NF_CONNTRACK=y
+# kernels ≤ 4.18 (Android 4.4 / 4.9)
+CONFIG_NF_CONNTRACK_IPV4=y
+
+# iptables infrastructure
+CONFIG_IP_NF_IPTABLES=y
+
+# filter table
+CONFIG_IP_NF_FILTER=y
+
+# NAT table
+CONFIG_NF_NAT=y
+# kernels ≤ 5.0 (Kernel 4.4 / 4.9)
+CONFIG_NF_NAT_IPV4=y
+CONFIG_IP_NF_NAT=y
+
+# MASQUERADE target (renamed in 5.2)
+CONFIG_IP_NF_TARGET_MASQUERADE=y
+CONFIG_NETFILTER_XT_TARGET_MASQUERADE=y
+
+# MSS clamping
+CONFIG_NETFILTER_XT_TARGET_TCPMSS=y
+
+# Policy routing
+CONFIG_IP_ADVANCED_ROUTER=y
+CONFIG_IP_MULTIPLE_TABLES=y
+
 # Disable this on older kernels to make internet work
 CONFIG_ANDROID_PARANOID_NETWORK=n
 ```
@@ -97,6 +139,14 @@ CONFIG_ANDROID_PARANOID_NETWORK=n
 | `CONFIG_MEMCG` | Memory controller cgroup. Used by systemd for memory accounting. |
 | `CONFIG_DEVTMPFS` | Device filesystem. Required for `/dev` setup and hardware access mode. |
 | `CONFIG_OVERLAY_FS` | Overlay filesystem support. Required for volatile mode. |
+| `CONFIG_NET_NS` | Network namespace. Required for NAT and None networking modes. |
+| `CONFIG_VETH` | Virtual Ethernet pairs. Required for NAT mode to connect host and container. |
+| `CONFIG_BRIDGE` | Bridge device support. Required for NAT mode networking. |
+| `CONFIG_IP_NF_IPTABLES` | IPTables infrastructure. Required for NAT and packet filtering. |
+| `CONFIG_NF_NAT` | Network Address Translation support. Required for NAT mode internet access. |
+| `CONFIG_NETFILTER_XT_TARGET_MASQUERADE` | Masquerade target. Explicitly required for NAT mode on Android. |
+| `CONFIG_NETFILTER_XT_TARGET_TCPMSS` | MSS Clamping. Prevents MTU issues in NAT mode over mobile data/WiFi. |
+| `CONFIG_IP_ADVANCED_ROUTER` | Advanced routing. Required for isolated network namespace routing. |
 | `CONFIG_ANDROID_PARANOID_NETWORK=n` | Disables Android's paranoid network restrictions which block container networking. |
 
 ---
@@ -201,9 +251,11 @@ This checks for:
 - Root access
 - Kernel version (minimum 3.18)
 - PID, MNT, UTS, IPC namespaces
+- Network namespace (optional, for NAT/None modes)
 - Cgroup namespace (optional, for modern cgroup isolation)
 - devtmpfs support
 - OverlayFS support (optional, for volatile mode)
+- VETH and Bridge support (optional, for NAT mode)
 - PTY/devpts support
 - Loop device support
 - ext4 support
@@ -227,6 +279,8 @@ This checks for:
 | Cgroup namespace | Kernel 4.6+ and `CONFIG_CGROUPS` | Falls back to legacy cgroup bind-mounting. |
 | devtmpfs | `CONFIG_DEVTMPFS=y` | **FATAL**. Static `/dev` doesn't exist; Droidspaces cannot function. |
 | OverlayFS | `CONFIG_OVERLAY_FS` | Volatile mode unavailable. |
+| Network namespace | `CONFIG_NET_NS=y` | NAT and None modes unavailable. |
+| VETH / Bridge | `CONFIG_VETH` / `CONFIG_BRIDGE` | NAT mode isolation unavailable. |
 | Seccomp | `CONFIG_SECCOMP=y` | Seccomp shield disabled; will cause boot crashes on legacy kernels. |
 
 ---
@@ -237,7 +291,7 @@ This checks for:
 | Version | Support | Notes |
 |---------|---------|-------|
 | 3.18 | Legacy | **Minimum floor.** Basic namespace support. Modern distros are unstable or won't even boot; **Alpine** is recommended. |
-| 4.4 - 4.19 | Stable | **Hardened.** Full support with adaptive Seccomp shield. **Ubuntu 22.04 LTS** is highly recommended for these kernels. It has been extensively tested (e.g., on 4.14.113) and handles cgroup slices correctly. Modern systemd-based distros (Arch, Fedora, SuSE) often fail on these older kernels, or may lead to cgroup issues or **Kernel Panics** [[ref](./Troubleshooting.md#modern-distros)]. |
+| 4.4 - 4.19 | Stable | **Hardened.** Full support with adaptive Seccomp shield. Supports any distribution with **systemd versions older than v258** (e.g., Ubuntu 22.04, 24.04, 25.04, 25.10 with v257.9). Modern distros with systemd v258+ (Arch, Fedora, openSUSE) often fail on these older kernels due to missing modern syscalls [[ref](./Troubleshooting.md#modern-distros)]. |
 | 5.4 - 5.10 | Recommended | **Mainline.** Full feature support, including nested containers and modern Cgroup v2. |
 | 5.15+ | Ideal | **Premium.** All features, best performance, and widest compatibility. |
 
@@ -252,13 +306,13 @@ This checks for:
 <a id="nested"></a>
 ## Nested Containers on Legacy Kernels
 
-On legacy kernels (especially Android 4.14 and below), Droidspaces allows nested containerization (e.g., Docker inside Alpine) by selectively disabling the Seccomp shield for non-systemd containers. However, you may still encounter host kernel limitations:
+On legacy kernels (especially Kernel 4.19 and below), Droidspaces allows nested containerization (e.g., Docker inside Alpine) by selectively disabling the Seccomp shield for non-systemd containers. However, you may still encounter host kernel limitations:
 
 - **BPF Conflicts**: Modern Docker/runc versions use `BPF_CGROUP_DEVICE` for device management. Legacy kernels often lack the required BPF attach types, leading to `Invalid argument` errors during `docker run`.
 - **Cgroup v1 Limits**: Service sandboxing and resource limiting in nested environments may behave unexpectedly on older cgroup v1 implementations.
 - **Performance**: Volatile mode overhead is significantly higher when nesting multiple layers of OverlayFS.
 
-**Workaround for Docker on 4.14:**
+**Workaround for Docker on legacy kernels:**
 If you see `bpf_prog_query` errors, try using a legacy `runc` binary or configuring Docker to use the older `cgroupfs` driver and `vfs` storage driver if necessary.
 
 ---

@@ -8,11 +8,11 @@
 
 # Droidspaces
 
-**Droidspaces** is a lightweight, portable Linux containerization tool that lets you run full Linux environments on top of Android or Linux, with complete init system support including **systemd** and **OpenRC**.
+**Droidspaces** is a lightweight, portable Linux containerization tool that lets you run full Linux environments on top of Android or Linux, with complete init system support including **systemd**, **OpenRC**, and other init systems (runit, s6, etc.).
 
 What makes Droidspaces unique is its **zero-dependency, native execution** on both Android and Linux. It's statically compiled against musl libc. If your device runs a Linux kernel, Droidspaces runs on it. No Termux, no middlemen, no setup overhead.
 
-- **Tiny footprint:** under 200KB per platform
+- **Tiny footprint:** under 260KB per platform
 - **Truly native:** runs directly on Android and Linux from the same binary
 - **Wide architecture support:** `aarch64`, `armhf`, `x86_64`, and `x86` as a single static binary
 - **Beautiful Android app:** manage unlimited containers and do everything the CLI can, all from a clean, intuitive GUI
@@ -65,7 +65,6 @@ What makes Droidspaces unique is its **zero-dependency, native execution** on bo
 - [Installation](#installation)
 - [Usage](#usage)
 - [Additional Documentation](#additional-documentation)
-- [To-do](#todo)
 
 ---
 
@@ -73,13 +72,13 @@ What makes Droidspaces unique is its **zero-dependency, native execution** on bo
 
 ## What is Droidspaces?
 
-Droidspaces is a **container runtime** that uses Linux kernel namespaces to run full Linux distributions with a real init system (systemd or OpenRC) as PID 1.
+Droidspaces is a **container runtime** that uses Linux kernel namespaces to run full Linux distributions with a real init system (systemd, OpenRC, etc.) as PID 1.
 
 Unlike traditional chroot, which simply changes the apparent root directory, Droidspaces creates proper process isolation. Each container gets its own PID tree, its own mount table, its own hostname, its own IPC resources, and its own cgroup hierarchy. The result is a full Linux environment that feels like a lightweight virtual machine, but with zero performance overhead because it shares the host kernel directly.
 
-Droidspaces is designed to work natively on both **Android** and **Linux Desktop**. On Android, it handles all the kernel quirks, SELinux conflicts, and encryption gotchas that break other container tools. On Linux Desktop, it works out of the box with no additional configuration needed.
+Droidspaces is designed to work natively on both **Android** and **Linux Desktop**. On Android, it handles all the kernel quirks, SELinux conflicts, complex networking scenarios, and encryption gotchas that break other container tools. On Linux Desktop, it works out of the box with no additional configuration needed.
 
-The entire runtime is a **single static binary** under 150KB, compiled against musl libc with no external dependencies.
+The entire runtime is a **single static binary** under 260KB, compiled against musl libc with no external dependencies.
 
 ---
 
@@ -89,14 +88,14 @@ The entire runtime is a **single static binary** under 150KB, compiled against m
 
 | Feature | Description |
 |---------|-------------|
-| **Init System Support** | Run systemd or OpenRC as PID 1. Full service management, journald logging, and proper boot/shutdown sequences. |
+| **Init System Support** | Run systemd, OpenRC or any other init system as PID 1. Full service management, journald logging, and proper boot/shutdown sequences. |
 | **Namespace Isolation** | Complete isolation via PID, MNT, UTS, IPC, and Cgroup namespaces. Each container has its own process tree, mount table, hostname, IPC resources, and cgroup hierarchy. |
 | **Network Isolation** | **3 Networking Modes (Host, NAT, None)**. Pure network isolation via `CLONE_NEWNET` (NAT/None modes) or shared host networking (Host mode). Works on both Android and Linux. |
 | **Port Forwarding** | Forward host ports to the container in NAT mode (e.g., `--port 22:22`). Supports TCP and UDP. |
 | **Volatile Mode** | Ephemeral containers using OverlayFS. All changes are stored in RAM and discarded on exit. Perfect for testing and development. |
 | **Custom Bind Mounts** | Map host directories into containers at arbitrary mount points. Supports both chained (`-B a:b -B c:d`) and comma-separated (`-B a:b,c:d`) syntax, up to 16 mounts. |
 | **Config File Support** | Load configurations directly from `.config` files using `--conf`. Integrates seamlessly with the CLI overrides (`--reset` is supported) and automatically syncs to the workspace for persistence. |
-| **Hardware Access Mode** | Expose host hardware (GPU, cameras, sensors, USB) to the container via devtmpfs. Enables GPU acceleration with Turnip + Zink / Panfrost on supported Android devices. PulseAudio is also supported in Android |
+| **Hardware Access Mode** | Expose host hardware (GPU, cameras, sensors, USB) to the container via devtmpfs. Enables GPU acceleration with Turnip + Zink / Panfrost on supported Android devices. PulseAudio and Virgl are also supported in Android |
 | **Multiple Containers** | Run unlimited containers simultaneously, each with its own name, PID file, and configuration. Start, stop, enter, and manage them independently. |
 | **In-container Reboot Support** | Handles in-container `reboot(2)` syscalls via a strict 3-level PID hierarchy to autonomously reinitialize the container sequence - TL;DR: you can restart the container remotely without touching Droidspaces! |
 | **Android Storage** | Bind-mount `/storage/emulated/0` into the container for direct access to the device's shared storage. |
@@ -106,8 +105,8 @@ The entire runtime is a **single static binary** under 150KB, compiled against m
 | **SELinux Permissive Mode** | Optionally set SELinux to permissive mode during container boot if needed. |
 | **Rootfs Image Support** | Boot containers from ext4 `.img` files with automatic loop mounting, filesystem checks, and SELinux context hardening if needed. **The Android app also supports creating portable containers in rootfs.img mode** [ [How to create an ext4 rootfs.img manually ? ](./Documentation/Installation-Linux.md#option-b-create-an-ext4-image-recommended)] |
 | **Auto-Recovery** | Automatic stale PID file cleanup, container scanning for orphaned processes, and robust config resurrection via in-memory metadata syncing from `/run/droidspaces`. |
-| **Cgroup Isolation** | Per-container cgroup hierarchies (`/sys/fs/cgroup/droidspaces/<name>`) with full systemd compatibility. Supports both cgroup v1 and v2. |
-| **Adaptive Seccomp Shield** | Kernel-aware BPF filter that resolves FBE keyring conflicts and prevents VFS deadlocks for **systemd** containers on legacy Android kernels (< 5.0). Automatically grants full namespace freedom to non-systemd containers (Alpine/OpenRC), enabling features like **nested containers/Docker**. |
+| **Cgroup Isolation (v1/v2)** | Per-container cgroup hierarchies (`/sys/fs/cgroup/droidspaces/<name>`) with full systemd compatibility. Supports both legacy v1 and modern v2 hierarchies. |
+| **Adaptive Seccomp Shield** | Kernel-aware BPF filter that resolves FBE keyring conflicts and prevents VFS deadlocks for **systemd** containers on legacy Android kernels (< 5.0). Automatically grants full namespace freedom to non-systemd containers (Alpine, OpenRC, runit, etc.), enabling features like **nested containers/Docker**. |
 
 ---
 
@@ -117,13 +116,13 @@ The entire runtime is a **single static binary** under 150KB, compiled against m
 
 | Feature | Chroot | Droidspaces |
 |---------|--------|-------------|
-| Init System | No. Cannot run systemd or OpenRC. | Yes. Full systemd/OpenRC support as PID 1. |
+| Init System | No. Cannot run systemd or OpenRC. | Yes. Full systemd/OpenRC, etc support as PID 1. |
 | Process Isolation | None. Shares the host PID space. | Full. Private PID namespace with its own PID tree. |
 | Filesystem Isolation | Partial. Only changes the apparent root. | Full. Uses `pivot_root` with a private mount namespace. |
 | Mount Isolation | None. Mount events propagate to the host. | Full. `MS_PRIVATE` prevents mount propagation. |
 | Cgroup Support | None. | Yes. Per-container cgroup hierarchies. |
 | Resource Accounting | None. | Yes. Via cgroup isolation. |
-| Service Management | Manual. Must start services individually. | Automatic. systemd manages the full service lifecycle. |
+| Service Management | Manual. Must start services individually. | Automatic. Init manages the full service lifecycle. |
 | Hostname Isolation | None. Shares the host hostname. | Yes. UTS namespace provides independent hostname. |
 | IPC Isolation | None. Shares System V IPC. | Yes. IPC namespace for semaphores and shared memory. |
 | Ephemeral Containers | Not possible. | Yes. Volatile mode via OverlayFS. |
@@ -140,7 +139,7 @@ The entire runtime is a **single static binary** under 150KB, compiled against m
 | Setup Complexity | High. Requires Termux, cross-compiled libraries, manual config files. | Low. Download and install the APK, then run it on Android; download, extract, and run it on Linux. |
 | Older kernels Support | Spotty. Many features break on older kernels. | Full. Adaptive seccomp shield handles kernel quirks. |
 | **Network Isolation** | **Broken on Android**. Even with all kernel configs enabled, network isolation with internet access never works. | **First-in-Class**. Perfectly handles network isolation with internet access on Android out of the box. |
-| Binary Size | 10MB+ (plus dependencies) | Under 150KB per architecture. |
+| Binary Size | 10MB+ (plus dependencies) | Under 260KB per architecture. |
 | Android Optimizations | None. Not designed for Android. | Yes. SELinux handling, FBE keyring management, storage integration, networking fixes |
 | Termux Required | Often. Used as the execution environment. | Never. Runs directly as a native binary. |
 | Nested Containers | Complex setup required. | Supported natively on 5.x+. On legacy kernels (< 5.0), supported *only* in non-systemd containers (Alpine) with kernel-level caveats. |
@@ -161,7 +160,7 @@ Droidspaces supports Android devices running Linux kernel **3.18 and above**:
 | Kernel Version | Support Level | Notes |
 |----------------|---------------|-------|
 | 3.18 | Supported | **Legacy.** Minimum floor. Basic namespace support. systemd-based distros may be unstable; **Alpine** is recommended. |
-| 4.4 - 4.19 | Stable | **Hardened.** Full support via Adaptive Seccomp Shield. [Distros newer than Ubuntu 22.04-era are not recommended](./Documentation/Troubleshooting.md#modern-distros). |
+| 4.4 - 4.19 | Stable | **Hardened.** Full support via Adaptive Seccomp Shield. [Supports any container with Systemd older than v258](./Documentation/Troubleshooting.md#modern-distros). |
 | 5.4 - 5.10 | Recommended | **Mainline.** Full feature support including nested containers and Cgroup v2. |
 | 5.15+ | Premium | **Full.** Best performance and maximum compatibility with all modern distributions. |
 
@@ -262,15 +261,6 @@ For the list of devices and distributions verified by the community, see the [Te
 | [Feature Deep Dives](Documentation/Features.md) | Detailed explanation of each major feature. |
 | [Troubleshooting](Documentation/Troubleshooting.md) | Common issues and their solutions. |
 | [Uninstallation Guide](Documentation/Uninstallation.md) | How to remove Droidspaces from your system. |
-
----
-
-<a id="todo"></a>
-## TO-DO / Roadmap
-
-The following features are planned for future development. Contributions and Pull Requests are highly welcome!
-
-- [ ] **Network Namespace Support**: Add explicit support for `CLONE_NEWNET` and veth bridging for dedicated per-container networking, instead of host-shared networking.
 
 ---
 

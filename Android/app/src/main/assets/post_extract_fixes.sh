@@ -1,6 +1,6 @@
 #!/system/bin/sh
 # Post-Extraction Fixes for Linux on Android
-# Copyright (c) 2025 ravindu644
+# Copyright (c) 2026 ravindu644
 # Applies generic fixes after rootfs tarball extraction
 # This script runs after extraction but before unmounting
 

@@ -17,12 +17,17 @@ Linux namespaces are a kernel feature that partitions system resources so that e
 | **UTS** | `CLONE_NEWUTS` | Hostname and domain name. Each container can have its own hostname. |
 | **IPC** | `CLONE_NEWIPC` | System V IPC and POSIX message queues. Prevents cross-container IPC leaks. |
 | **Cgroup** | `CLONE_NEWCGROUP` | Cgroup root directory. Each container sees its own cgroup hierarchy. |
+| **Network**| `CLONE_NEWNET` | Network stack. Isolated interfaces, routing, and firewall (NAT/None modes). |
 
-### Why Not Network Namespace? (Legacy Default)
+### Network Namespace Isolation (`--net`)
 
-By default (`--net=host`), Droidspaces deliberately does **not** use a network namespace (`CLONE_NEWNET`). The container shares the host's network stack. This is a design choice that greatly simplifies setup: containers get internet access immediately without virtual bridges, NAT, or firewall rules. On Android, where networking is already complex (cellular, Wi-Fi, VPN), avoiding network namespaces prevents a whole category of connectivity issues.
+Droidspaces supports three networking modes that determine whether a network namespace (`CLONE_NEWNET`) is used:
 
-However, for users requiring **Pure Network Isolation**, Droidspaces now supports NAT and None modes which utilize `CLONE_NEWNET` to provide a completely private network stack.
+1. **Host Mode (`--net=host`) - Default**: Droidspaces deliberately does **not** unshare the network namespace. The container shares the host's network stack. This greatly simplifies setup: containers get internet access immediately without virtual bridges, NAT, or firewall rules. On Android, where networking is already complex (cellular, Wi-Fi, VPN), this avoids a whole category of connectivity issues.
+
+2. **NAT Mode (`--net=nat`)**: The container is placed in a private network namespace. It is connected to the host via a virtual bridge or veth pair, providing **Pure Network Isolation** while maintaining internet access through the host's upstream interfaces. Compatible with the vast majority of Android devices.
+
+3. **None Mode (`--net=none`)**: The container is placed in a private, air-gapped network namespace with only the loopback interface enabled for maximum security.
 
 ### Why Not User Namespace?
 
@@ -62,8 +67,13 @@ Three things are required for systemd to function inside a container:
 
 ### Supported Init Systems
 
+Droidspaces is theoretically compatible with **any init system** that can run as PID 1, including:
+
 - **systemd** (most Linux distributions)
 - **OpenRC** (Alpine Linux, Gentoo)
+- **runit** (Void Linux, Devuan)
+- **s6-init** (Alpine, various containers)
+- **SysVinit** (Debian, Devuan)
 
 The init binary is strictly expected at `/sbin/init`. If this binary is missing or not executable, Droidspaces will fail to boot the container to ensure that services and session management function as expected.
 
@@ -122,7 +132,7 @@ Droidspaces detects this incompatibility at runtime and provides a clear diagnos
 The `--hw-access` flag exposes the host's hardware devices to the container by mounting `devtmpfs` instead of a private `tmpfs` at `/dev`.
 
 This gives the container access to:
-- **GPU** (for hardware-accelerated graphics via Turnip + Zink, Panfrost)
+- **GPU** (for hardware-accelerated graphics via Turnip + Zink, Panfrost/Native GPU Acceleration in desktop for Intel and AMD)
 - **Cameras**
 - **Sensors** (accelerometer, gyroscope, etc.)
 - **USB devices**
@@ -156,11 +166,11 @@ droidspaces --name=gpu-test --rootfs=/path/to/rootfs --hw-access start
 
 When `--hw-access` is enabled, Droidspaces automatically:
 
-1. **Scans host GPU devices** — Before `pivot_root`, it probes ~40 known GPU device paths (`/dev/dri/*`, `/dev/mali*`, `/dev/kgsl-3d0`, `/dev/nvidia*`, etc.) and collects their group IDs via `stat()`.
+1. **Scans host GPU devices** — Before `pivot_root`, it probes ~40 known GPU device paths (`/dev/dri/*`, `/dev/mali*`, `/dev/kgsl-3d0`, `/dev/nvidia*`, etc.) and collects their group IDs via `stat()`. **Dangerous nodes like `/dev/dri/card*` are explicitly skipped** to prevent host kernel panics, as these nodes are restricted to the host's display manager.
 2. **Creates matching groups** — After `pivot_root`, it appends entries like `gpu_<GID>:x:<GID>:root` to the container's `/etc/group`. The container's root user is automatically added to each group.
 3. **Idempotent restarts** — On container restart, existing groups are detected and skipped (no duplicate entries).
 
-This eliminates the need for manual `groupadd`/`usermod` commands inside the container.
+This eliminates the need for manual `groupadd`/`usermod` commands inside the container, while ensuring the host's kernel stability by avoiding restricted hardware paths.
 
 ### X11 Socket Mounting
 
@@ -172,8 +182,6 @@ For GUI application support, Droidspaces automatically bind-mounts the X11 socke
 > [!TIP]
 > X11 support can be enabled independently using the `--termux-x11` (`-X`) flag. This is the recommended way to use GUI applications on Android if you do not need full GPU/hardware access, as it preserves a higher level of isolation.
 
-> [!IMPORTANT]
-> Only the `.X11-unix` subdirectory is mounted — never the entire `/tmp`. Binding `/tmp` on encrypted Android devices causes "required key not available" errors due to FBE keyring conflicts.
 
 After starting the container, set `DISPLAY=:0` inside the container to use the X11 display.
 
@@ -252,7 +260,7 @@ The container is placed in a private network namespace (`CLONE_NEWNET`) and conn
 - **Deterministic IP**: Each container is assigned a unique IP in the `172.28.0.0/16` range, derived from its PID.
 - **Embedded DHCP**: Droidspaces includes a minimal, built-in DHCP server to automatically configure the container's `eth0`.
 - **Pure Isolation**: The container cannot see or interact with the host's network interfaces directly.
-- **Mandatory Upstream**: You **must** specify which host interfaces provide internet access via `--upstream` (e.g., `--upstream wlan0,rmnet0`).
+- **Mandatory Upstream**: You **must** specify which host interfaces provide internet access via `--upstream` (e.g., `--upstream wlan0,rmnet0`). Wildcards are also supported (e.g., `rmnet*`, `wlan0`, `v4-rmnet_data*`).
 
 > [!IMPORTANT]
 > NAT mode is **IPv4 only**. If your upstream interface lacks an IPv4 address (IPv6-only network), internet access will not work. See [IPv4 NAT Quirks](Troubleshooting.md#ipv4-quirks) for a workaround.
@@ -319,6 +327,8 @@ When restarting an image-based container, Droidspaces preserves the loop mount. 
 
 Droidspaces creates per-container cgroup trees at `/sys/fs/cgroup/droidspaces/<name>` on the host. Combined with the cgroup namespace, each container sees its own clean cgroup hierarchy.
 
+**Note:** Cgroup isolation is not available in `--force-cgroupv1` mode.
+
 ### Why It Matters
 
 systemd relies heavily on cgroups for:
@@ -338,8 +348,13 @@ Before creating the cgroup namespace, Droidspaces moves the monitor process into
 Droidspaces supports both cgroup versions:
 
 - **Cgroup v2 (unified):** Used by modern distributions. Mounted as a single hierarchy.
-- **Cgroup v1 (legacy):** Used by older distributions. Droidspaces handles comounted controllers (e.g., `cpu,cpuacct`) and creates symlinks for secondary names.
-- **Hybrid mode:** Some systems use both v1 and v2. Droidspaces detects and handles this correctly.
+- **Cgroup v1 (legacy):** Used by older distributions. Droidspaces handles comounted controllers (e.g., `cpu,cpuacct`) and creates symlinks for secondary names in older kernels or `--force-cgroupv1` mode.
+
+### Forcing Legacy Cgroup V1 (`--force-cgroupv1`)
+
+On legacy Android kernels (3.18, 4.4, or 4.9), the host system may either lack Cgroup v2 support entirely or provide a partial implementation without the essential controllers (CPU, memory, etc.) required by modern `systemd`. This inconsistency often causes `systemd` to misidentify the environment, leading to critical boot failures.
+
+The `--force-cgroupv1` flag acts as an **expert escape hatch**. It instructs Droidspaces to strictly utilize the legacy v1 hierarchy even if v2 appears available on the host. This ensures maximum stability and compatibility for distributions using modern `systemd` versions on older kernel infrastructure.
 
 ### The `su` Fix
 
@@ -382,17 +397,6 @@ Droidspaces includes several sophisticated subsystems designed specifically to h
 Standard Linux distributions use `udevadm trigger` to "coldplug" hardware devices during boot. On many Android devices, triggering all devices simultaneously causes the kernel to deadlock or panic because Android's own hardware drivers (which are already running) do not expect another manager to re-trigger them.
 
 **The Solution**: Droidspaces masks the standard udev trigger services and installs a **Safe Udev Trigger**. This service only triggers a strictly defined subset of subsystems (`usb`, `block`, `input`, `tty`) that are safe to re-scan. This enables the container to see new USB drives or keyboards without risking a system crash.
-
-### Network Metric Auto-Tuning
-
-Android doesn't use standard Linux networking; it uses "Connectivity Manager" to switch between WiFi, Cellular data, and VPNs on the fly. This often breaks containers because their internal routing table becomes stale.
-
-**The Solution**: The Droidspaces installer injects a specialized `systemd-networkd` configuration that applies weighted metrics to different interface patterns:
-- **WiFi (`wlan*`)**: Highest priority (Metric 100).
-- **Mobile Data (`rmnet*`, `pdp*`)**: Secondary priority (Metric 200).
-- **Others (`eth*`, `usb*`)**: Tertiary priority (Metric 300).
-
-Combined with a hardcoded DNS fallback inside the container, this ensures that the Linux environment remains connected even as your phone hops between networks.
 
 ### Atomic Backend Installation
 

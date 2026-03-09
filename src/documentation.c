@@ -322,6 +322,20 @@ static void print_page(int page, const char *bin) {
     printf("EXPERT USAGE\n");
     printf("--------------\n\n");
 
+    printf("%sNetwork Isolation Modes (--net):%s\n", bold, reset);
+    printf("  %s -r rootfs/ --net=host start   (Default: shared with host)\n",
+           bin);
+    printf("  %s -r rootfs/ --net=none start   (No network access)\n", bin);
+    printf("  %s -r rootfs/ --net=nat --upstream=wlan0,rmnet0 start\n", bin);
+    printf("  %s -r rootfs/ --net=nat --upstream=v4-rmnet_data* start\n", bin);
+    printf("  %s -r rootfs/ --net=nat --upstream=wlan0 --port=22:22 start\n",
+           bin);
+    printf("  (NAT creates an isolated namespace with internet access)\n\n");
+
+    printf("%sForce Legacy Cgroup V1 Hierarchy:%s\n", bold, reset);
+    printf("  %s -r rootfs/ --force-cgroupv1 start\n", bin);
+    printf("  (Escape hatch: uses V1 even if V2 is available on host)\n\n");
+
     printf("%sEphemeral container (Volatile Mode):%s\n", bold, reset);
     printf("  %s -r /path/to/rootfs --volatile start\n", bin);
     printf("  (All changes are stored in RAM and lost on exit)\n\n");
