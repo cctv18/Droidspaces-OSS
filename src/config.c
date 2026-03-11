@@ -217,7 +217,6 @@ int ds_config_load(const char *config_path, struct ds_config *cfg) {
     } else if (strcmp(key, "foreground") == 0) {
       cfg->foreground = parse_bool(val);
     } else if (strcmp(key, "pidfile") == 0) {
-      safe_strncpy(cfg->pidfile, val, sizeof(cfg->pidfile));
     } else if (strcmp(key, "env_file") == 0) {
       if (strstr(val, "..") ||
           (val[0] == '/' && !is_subpath(get_workspace_dir(), val))) {
@@ -388,9 +387,6 @@ int ds_config_save(const char *config_path, struct ds_config *cfg) {
     else
       fprintf(f_out, "rootfs_path=%s\n", cfg->rootfs_path);
   }
-
-  if (cfg->pidfile[0])
-    fprintf(f_out, "pidfile=%s\n", cfg->pidfile);
 
   fprintf(f_out, "enable_ipv6=%d\n", cfg->enable_ipv6);
   if (is_android()) {
