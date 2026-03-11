@@ -488,6 +488,10 @@ int start_rootfs(struct ds_config *cfg) {
     goto cleanup;
   }
 
+  /* Set FD_CLOEXEC on both ends of sync_pipe */
+  fcntl(sync_pipe[0], F_SETFD, FD_CLOEXEC);
+  fcntl(sync_pipe[1], F_SETFD, FD_CLOEXEC);
+
   /* 7. Configure host-side networking (NAT, ip_forward, DNS) BEFORE fork.
    * This eliminates the race condition where the child boots and reads
    * DNS before the parent has written it. */
@@ -607,6 +611,15 @@ int start_rootfs(struct ds_config *cfg) {
         ds_error("Failed to create NAT sync pipes: %s", strerror(errno));
         _exit(EXIT_FAILURE);
       }
+
+      /* Set FD_CLOEXEC on all new pipe ends */
+      fcntl(cfg->net_ready_pipe[0], F_SETFD, FD_CLOEXEC);
+      fcntl(cfg->net_ready_pipe[1], F_SETFD, FD_CLOEXEC);
+      fcntl(cfg->net_done_pipe[0], F_SETFD, FD_CLOEXEC);
+      fcntl(cfg->net_done_pipe[1], F_SETFD, FD_CLOEXEC);
+      fcntl(mid_sync_pipe[0], F_SETFD, FD_CLOEXEC);
+      fcntl(mid_sync_pipe[1], F_SETFD, FD_CLOEXEC);
+
       ds_log("[NET] Sync pipes created for net_mode=%d", cfg->net_mode);
     }
 
