@@ -26,7 +26,7 @@ What makes Droidspaces unique is its **zero-dependency, native execution** on bo
   <tr valign="top">
     <td colspan="2" align="center">
       <b>Linux Showcase</b><br>
-      <i>Linux Mint in volatile + --hw-access + foreground mode</i><br>
+      <i>Ubuntu + foreground mode</i><br>
       <img src="Documentation/resources/linux/linux-showcase.png" width="95%"><br><br>
     </td>
   </tr>
