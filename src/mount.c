@@ -126,6 +126,23 @@ int domount_silent(const char *src, const char *tgt, const char *fstype,
   return 0;
 }
 
+/* Helper to mask a path: uses bind-mount /dev/null for files,
+ * and an empty tmpfs for directories to prevent "Not a directory" errors.
+ * Silently skips if the path doesn't exist. */
+static void ds_mask_path(const char *path) {
+  struct stat st;
+  if (stat(path, &st) < 0)
+    return;
+
+  if (S_ISDIR(st.st_mode)) {
+    /* Mask directory with an empty, read-only tmpfs */
+    mount("none", path, "tmpfs", MS_RDONLY, NULL);
+  } else {
+    /* Mask file with /dev/null */
+    mount("/dev/null", path, NULL, MS_BIND, NULL);
+  }
+}
+
 int bind_mount(const char *src, const char *tgt) {
   /* Ensure target exists */
   struct stat st_src, st_tgt;
@@ -147,6 +164,107 @@ int bind_mount(const char *src, const char *tgt) {
   }
 
   return domount(src, tgt, NULL, MS_BIND | MS_REC, NULL);
+}
+
+/*
+ * ds_apply_jail_mask()
+ *
+ * Secure sensitive kernel interfaces by masking (bind-mounting /dev/null)
+ * or remounting as read-only.
+ *
+ * This reduces the container's attack surface and prevents it from manipulating
+ * the host kernel via /proc and /sys.
+ *
+ * In Standard Mode (hw_access=0), we are very strict.
+ * In Hardware Mode (hw_access=1), we preserve most paths to fulfill the
+ * "everything possible" requirement for low-level hardware tools.
+ */
+int ds_apply_jail_mask(int hw_access) {
+  /* Universal masks - dangerous for ANY container regardless of HW mode */
+  const char *universal_masks[] = {"/proc/sysrq-trigger",
+                                   "/proc/kcore",
+                                   "/proc/latency_stats",
+                                   "/proc/timer_list",
+                                   "/proc/timer_stats",
+                                   "/proc/sched_debug",
+                                   NULL};
+
+  /* Standard mode masks - restricted to protect host kernel surface */
+  const char *standard_masks[] = {"/proc/keys",
+                                  "/proc/partitions",
+                                  "/proc/diskstats",
+                                  "/sys/devices/virtual/powercap",
+                                  "/sys/kernel/debug",
+                                  "/sys/kernel/security",
+                                  "/sys/kernel/tracing",
+                                  "/sys/block",
+                                  "/sys/dev/block",
+                                  "/sys/class/block",
+                                  NULL};
+
+  /* Standard mode read-only remounts */
+  const char *standard_ro[] = {"/proc/bus",     "/proc/fs",   "/proc/irq",
+                               "/proc/asound",  "/proc/acpi", "/proc/scsi",
+                               "/sys/firmware", NULL};
+
+  /* Surgical sysctl protection - global settings that affect the host */
+  const char *standard_surgical_ro[] = {
+      "/proc/sys/kernel/panic",        "/proc/sys/kernel/panic_on_oops",
+      "/proc/sys/kernel/core_pattern", "/proc/sys/kernel/modprobe",
+      "/proc/sys/vm/panic_on_oom",     NULL};
+
+  /* Apply universal masks */
+  for (int i = 0; universal_masks[i]; i++) {
+    ds_mask_path(universal_masks[i]);
+  }
+
+  /* Universal Read-Only Mask: /proc/sys/kernel/sysrq
+   * We make it RO in ALL modes to prevent host sabotage. */
+  const char *sysrq_sysctl = "/proc/sys/kernel/sysrq";
+  if (access(sysrq_sysctl, F_OK) == 0) {
+    if (mount(sysrq_sysctl, sysrq_sysctl, NULL,
+              MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) < 0) {
+      mount(sysrq_sysctl, sysrq_sysctl, NULL, MS_BIND | MS_REC, NULL);
+      mount(sysrq_sysctl, sysrq_sysctl, NULL, MS_BIND | MS_RDONLY | MS_REMOUNT,
+            NULL);
+    }
+  }
+
+  if (hw_access) {
+    ds_log("[SEC] Hardware Mode: preserved sensitive /proc and /sys paths.");
+    return 0;
+  }
+
+  /* Apply standard mode masks */
+  for (int i = 0; standard_masks[i]; i++) {
+    ds_mask_path(standard_masks[i]);
+  }
+
+  /* Apply standard mode read-only remounts */
+  for (int i = 0; standard_ro[i]; i++) {
+    if (access(standard_ro[i], F_OK) == 0) {
+      if (mount(standard_ro[i], standard_ro[i], NULL,
+                MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) < 0) {
+        mount(standard_ro[i], standard_ro[i], NULL, MS_BIND | MS_REC, NULL);
+        mount(standard_ro[i], standard_ro[i], NULL,
+              MS_BIND | MS_RDONLY | MS_REMOUNT, NULL);
+      }
+    }
+  }
+
+  /* Apply surgical read-only protection for global sysctls */
+  for (int i = 0; standard_surgical_ro[i]; i++) {
+    const char *path = standard_surgical_ro[i];
+    if (access(path, F_OK) == 0) {
+      if (mount(path, path, NULL, MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) < 0) {
+        mount(path, path, NULL, MS_BIND | MS_REC, NULL);
+        mount(path, path, NULL, MS_BIND | MS_RDONLY | MS_REMOUNT, NULL);
+      }
+    }
+  }
+
+  ds_log("[SEC] Jail mask applied (hardened /proc and /sys).");
+  return 0;
 }
 
 /*

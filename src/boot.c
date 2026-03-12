@@ -6,6 +6,69 @@
  */
 
 #include "droidspace.h"
+#include <linux/capability.h>
+#include <sys/prctl.h>
+
+/*
+ * ds_apply_capability_hardening()
+ *
+ * Drops dangerous capabilities from the bounding set to reduce the container's
+ * attack surface.
+ *
+ * In Standard Mode (hw_access=0), we drop several sensitive capabilities.
+ * In Hardware Mode (hw_access=1), we preserve most to ensure full
+ * low-level hardware access (USB, Serial, Bluetooth, Flashing).
+ */
+void ds_apply_capability_hardening(int hw_access) {
+  /* Universal drops - even in hardware mode, there's no legitimate use
+   * for these inside a container (kernel module loading or host reboot). */
+  int universal_drops[] = {CAP_SYS_MODULE, CAP_SYS_BOOT, -1};
+  int total_dropped = 0;
+
+  for (int i = 0; universal_drops[i] != -1; i++) {
+    if (prctl(PR_CAPBSET_DROP, universal_drops[i], 0, 0, 0) < 0) {
+      if (errno != EINVAL) {
+        ds_warn("[SEC] Failed to drop universal cap %d: %s", universal_drops[i],
+                strerror(errno));
+      }
+    } else {
+      total_dropped++;
+    }
+  }
+
+  if (hw_access) {
+    ds_log("[SEC] Hardware Mode: preserved bounding set (dropped %d universal "
+           "caps).",
+           total_dropped);
+    return;
+  }
+
+  /* Standard Hardening Tier: drop capabilities that affect host stability
+   * or allow escaping the container's isolation. */
+  int caps_to_drop[] = {
+      CAP_SYS_RAWIO,     /* Raw hardware access (I/O ports, memory) */
+      CAP_SYS_PTRACE,    /* Process tracing/injection across namespaces */
+      CAP_SYS_PACCT,     /* Process accounting */
+      CAP_MAC_ADMIN,     /* Mandatory Access Control policy modification */
+      CAP_MAC_OVERRIDE,  /* Bypass MAC policies */
+      CAP_WAKE_ALARM,    /* Affect host power management / wakeups */
+      CAP_BLOCK_SUSPEND, /* Affect host power management / sleep */
+      CAP_AUDIT_READ,    /* Read kernel audit logs */
+      -1};
+
+  for (int i = 0; caps_to_drop[i] != -1; i++) {
+    if (prctl(PR_CAPBSET_DROP, caps_to_drop[i], 0, 0, 0) < 0) {
+      if (errno != EINVAL) {
+        ds_warn("[SEC] Failed to drop cap %d: %s", caps_to_drop[i],
+                strerror(errno));
+      }
+    } else {
+      total_dropped++;
+    }
+  }
+
+  ds_log("[SEC] Bounding set hardened (dropped %d caps).", total_dropped);
+}
 
 int internal_boot(struct ds_config *cfg) {
   /* Defensive check: ensure configuration is valid */
@@ -367,6 +430,9 @@ int internal_boot(struct ds_config *cfg) {
   /* 18. Setup devpts (must be after pivot_root for newinstance) */
   setup_devpts(cfg->hw_access);
 
+  /* Apply jail mask after pivot_root for correct path resolution */
+  ds_apply_jail_mask(cfg->hw_access);
+
   /* 19. Configure rootfs networking (hostname, resolv.conf, etc) */
   fix_networking_rootfs(cfg);
 
@@ -410,6 +476,11 @@ int internal_boot(struct ds_config *cfg) {
       ds_warn("Failed to create profile.d symlink: %s", strerror(errno));
     }
   }
+
+  /* 23c. Apply security hardening (capabilities)
+   * This is done at the very end to ensure all setup tasks that might need
+   * privileges (like chown/chmod) are finished. */
+  ds_apply_capability_hardening(cfg->hw_access);
 
   /* 24. Redirect standard I/O to /dev/console */
   int console_fd = open("/dev/console", O_RDWR);
