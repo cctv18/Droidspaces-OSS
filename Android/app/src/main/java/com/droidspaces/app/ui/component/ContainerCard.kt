@@ -219,6 +219,7 @@ fun ContainerCard(
             if (container.runAtBoot) options.add(context.getString(R.string.run_at_boot_option))
             if (container.volatileMode) options.add(context.getString(R.string.volatile_option))
             if (container.forceCgroupv1) options.add(context.getString(R.string.cgroupv1_option))
+            if (container.blockNestedNs) options.add(context.getString(R.string.block_nested_ns_option))
 
             if (options.isNotEmpty()) {
                 Text(

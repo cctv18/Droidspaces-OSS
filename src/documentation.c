@@ -317,7 +317,7 @@ static void print_page(int page, const char *bin) {
     printf("  %s --name=mycontainer stop\n\n", bin);
     break;
 
-  case 3: /* Gigachad Usage */
+  case 3: /* Expert Usage */
     printf("\n");
     printf("EXPERT USAGE\n");
     printf("--------------\n\n");
@@ -335,6 +335,17 @@ static void print_page(int page, const char *bin) {
     printf("%sForce Legacy Cgroup V1 Hierarchy:%s\n", bold, reset);
     printf("  %s -r rootfs/ --force-cgroupv1 start\n", bin);
     printf("  (Escape hatch: uses V1 even if V2 is available on host)\n\n");
+
+    printf(
+        "%sBlock Nested Namespaces (Legacy Stock Kernel VFS Deadlock Fix):%s\n",
+        bold, reset);
+    printf("  %s -r rootfs/ --block-nested-namespaces start\n", bin);
+    printf("  (For kernels like 4.14.x stock (Galaxy S10) with VFS deadlock\n");
+    printf("   bug. Prevents systemd from creating nested namespaces "
+           "(PrivateTmp,\n");
+    printf(
+        "   etc.) that trigger grab_super() deadlocks. Trade-off: disables\n");
+    printf("   systemd sandboxing and Docker-in-container.)\n\n");
 
     printf("%sEphemeral container (Volatile Mode):%s\n", bold, reset);
     printf("  %s -r /path/to/rootfs --volatile start\n", bin);

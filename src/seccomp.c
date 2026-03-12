@@ -121,10 +121,17 @@ int ds_seccomp_apply_minimal(int hw_access) {
  *
  * Returns ENOSYS for keyring syscalls on legacy Android kernels (< 5.x)
  * to avoid unnecessary kernel path traversal for missing subsystems.
+ *
+ * When block_nested_ns=1, additionally blocks creation of new user namespaces
+ * inside the container (unshare/clone with CLONE_NEWUSER or namespace flags).
+ * This is required on stock kernels like 4.14.113 (Galaxy S10) which have a
+ * VFS deadlock bug triggered by systemd sandboxing (PrivateTmp, etc.) that
+ * calls grab_super() while holding a namespace lock.
+ *
+ * Trade-off: --block-nested-namespaces nukes systemd sandboxing and also
+ * prevents running Docker inside the container, but fixes the hard deadlock.
  */
-int android_seccomp_setup(int is_systemd) {
-  (void)is_systemd; /* reserved, no longer used for namespace filtering */
-
+int android_seccomp_setup(int is_systemd, int block_nested_ns) {
   int major = 0, minor = 0;
   if (get_kernel_version(&major, &minor) < 0)
     return -1;
@@ -135,11 +142,16 @@ int android_seccomp_setup(int is_systemd) {
          "shield...",
          major, minor);
 
-  struct sock_filter filter[] = {
-      /* Load architecture */
+  /* Namespace flags to filter on legacy kernels (only for systemd).
+   * Covers CLONE_NEWNS|CLONE_NEWUTS|CLONE_NEWIPC|CLONE_NEWNET|
+   *        CLONE_NEWPID|CLONE_NEWCGROUP|CLONE_NEWUSER */
+  const uint32_t ns_mask = 0x7E020000;
+
+  struct sock_filter filter_base[] = {
+      /* [0] Load architecture */
       BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
 
-  /* Validate architecture -- wrong arch: allow unconditionally */
+  /* [1] Validate architecture -- wrong arch: allow unconditionally */
 #if defined(__aarch64__)
       BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_AARCH64, 1, 0),
 #elif defined(__x86_64__)
@@ -152,10 +164,10 @@ int android_seccomp_setup(int is_systemd) {
       /* Wrong arch -- allow */
       BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
 
-      /* Load syscall number */
+      /* [2] Load syscall number */
       BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
 
-      /* Keyring syscalls -> ENOSYS (missing in Android) */
+      /* [3] Keyring syscalls -> ENOSYS (missing in Android) */
       BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_keyctl, 0, 1),
       BPF_STMT(BPF_RET | BPF_K,
                SECCOMP_RET_ERRNO | (ENOSYS & SECCOMP_RET_DATA)),
@@ -167,14 +179,73 @@ int android_seccomp_setup(int is_systemd) {
       BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_request_key, 0, 1),
       BPF_STMT(BPF_RET | BPF_K,
                SECCOMP_RET_ERRNO | (ENOSYS & SECCOMP_RET_DATA)),
+  };
 
-      /* Allow everything else */
+  /* Namespace filter appended only when --block-nested-namespaces is active
+   * AND we are running a systemd rootfs.
+   *
+   * [4] Conditional jump: if not systemd, jump over the 5 namespace
+   *     instructions (jf=5). If systemd, fall through to check the syscall.
+   *
+   * [5] Check for unshare(). If it IS unshare, fall-through to flag check.
+   *     Otherwise check clone().
+   *
+   * [6] Check for clone(). If it IS clone, fall-through to flag check.
+   *     Otherwise jump past the block to ALLOW (jf=3).
+   *
+   * [7] Load first argument (flags).
+   * [8] If any namespace flag set, fall through to EPERM; otherwise jump
+   *     over it (jf=1).
+   * [9] Return EPERM.
+   * [10] Allow everything else. */
+  struct sock_filter filter_ns[] = {
+      BPF_JUMP(BPF_JMP | BPF_JA, (uint16_t)(is_systemd ? 0 : 5), 0, 0),
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_unshare, 1, 0),
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_clone, 0, 3),
+      BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+               offsetof(struct seccomp_data, args[0])),
+      BPF_JUMP(BPF_JMP | BPF_JSET | BPF_K, ns_mask, 0, 1),
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA)),
+      /* Default: Allow */
       BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
   };
 
+  struct sock_filter filter_allow[] = {
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+  };
+
+  /* Assemble the filter dynamically based on block_nested_ns */
+  struct sock_filter combined[64];
+  unsigned int count = 0;
+
+  unsigned int base_count = sizeof(filter_base) / sizeof(filter_base[0]);
+  if (count + base_count > 64)
+    return -1;
+  memcpy(combined + count, filter_base, base_count * sizeof(filter_base[0]));
+  count += base_count;
+
+  if (block_nested_ns) {
+    ds_log("[SEC] --block-nested-namespaces active: nuking systemd sandbox "
+           "calls to fix VFS deadlock on legacy kernel %d.%d.",
+           major, minor);
+    unsigned int ns_count = sizeof(filter_ns) / sizeof(filter_ns[0]);
+    if (count + ns_count > 64)
+      return -1;
+    memcpy(combined + count, filter_ns, ns_count * sizeof(filter_ns[0]));
+    count += ns_count;
+  } else {
+    /* No namespace filtering: just append the ALLOW default */
+    unsigned int allow_count = sizeof(filter_allow) / sizeof(filter_allow[0]);
+    if (count + allow_count > 64)
+      return -1;
+    memcpy(combined + count, filter_allow,
+           allow_count * sizeof(filter_allow[0]));
+    count += allow_count;
+  }
+
   struct sock_fprog prog = {
-      .len = (unsigned short)(sizeof(filter) / sizeof(filter[0])),
-      .filter = filter,
+      .len = (unsigned short)count,
+      .filter = combined,
   };
 
   if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog) < 0) {

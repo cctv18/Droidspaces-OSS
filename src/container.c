@@ -1284,7 +1284,7 @@ int enter_rootfs(struct ds_config *cfg, const char *user) {
      * is_systemd_rootfs("/") resolves against the container's rootfs. */
     ds_log_silent = 1;
     ds_seccomp_apply_minimal(cfg->hw_access);
-    android_seccomp_setup(is_systemd_rootfs("/"));
+    android_seccomp_setup(is_systemd_rootfs("/"), cfg->block_nested_ns);
     ds_apply_capability_hardening(cfg->hw_access, cfg->net_mode);
     ds_log_silent = 0;
 
@@ -1468,7 +1468,7 @@ int run_in_rootfs(struct ds_config *cfg, int argc, char **argv) {
      * Same reasoning: run processes are not children of container PID 1. */
     ds_log_silent = 1;
     ds_seccomp_apply_minimal(cfg->hw_access);
-    android_seccomp_setup(is_systemd_rootfs("/"));
+    android_seccomp_setup(is_systemd_rootfs("/"), cfg->block_nested_ns);
     ds_apply_capability_hardening(cfg->hw_access, cfg->net_mode);
     ds_log_silent = 0;
 

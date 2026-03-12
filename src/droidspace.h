@@ -246,6 +246,9 @@ struct ds_config {
   int enable_ipv6;        /* --enable-ipv6 */
   int android_storage;    /* --enable-android-storage */
   int selinux_permissive; /* --selinux-permissive */
+  int block_nested_ns;    /* --block-nested-namespaces: re-enable namespace
+                              filtering in android_seccomp_setup for kernels
+                              affected by VFS deadlocks (e.g. 4.14.x stock) */
   int net_bridgeless;     /* Probe result: no CONFIG_BRIDGE, use PTP NAT */
   int reboot_cycle;       /* 1 if we are in a reboot loop */
   int force_cgroupv1;     /* --force-cgroupv1: use v1 even if v2 is available */
@@ -373,7 +376,7 @@ int android_setup_storage(const char *rootfs_path);
  * ---------------------------------------------------------------------------*/
 
 int ds_seccomp_apply_minimal(int hw_access);
-int android_seccomp_setup(int is_systemd);
+int android_seccomp_setup(int is_systemd, int block_nested_ns);
 
 /* ---------------------------------------------------------------------------
  * mount.c

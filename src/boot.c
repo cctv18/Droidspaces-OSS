@@ -189,7 +189,7 @@ int internal_boot(struct ds_config *cfg) {
    * Minimal blocks kexec/module loading for all kernels/modes.
    * Android setup handles keyring compat for legacy kernels. */
   ds_seccomp_apply_minimal(cfg->hw_access);
-  android_seccomp_setup(is_systemd);
+  android_seccomp_setup(is_systemd, cfg->block_nested_ns);
 
   /* 3. Setup volatile overlay INSIDE the container's mount namespace.
    * This MUST happen here (not in parent) so the overlay's connection to

@@ -77,6 +77,14 @@ void print_usage(void) {
       "                            v2 is available on the host. Useful if\n"
       "                            modern cgroup v2 setup leads to stability\n"
       "                            issues on legacy Android kernels.\n");
+  printf(
+      "      --block-nested-namespaces\n"
+      "                            Block nested namespace creation inside the\n"
+      "                            container (unshare/clone) to fix VFS\n"
+      "                            deadlocks on stock kernels like 4.14.x\n"
+      "                            (e.g. Galaxy S10). Trade-off: disables\n"
+      "                            systemd sandboxing and "
+      "Docker-in-container.\n");
   printf("  --help                    Show this help message\n\n");
 
   printf(C_BOLD "Examples:" C_RESET "\n");
@@ -328,6 +336,7 @@ int main(int argc, char **argv) {
       {"port", required_argument, 0, 258},
       {"upstream", required_argument, 0, 259},
       {"force-cgroupv1", no_argument, 0, 260},
+      {"block-nested-namespaces", no_argument, 0, 261},
       {"reset", no_argument, 0, 256},
       {"help", no_argument, 0, 'v'},
       {0, 0, 0, 0}};
@@ -684,6 +693,11 @@ int main(int argc, char **argv) {
     case 260:
       /* --force-cgroupv1: escape hatch to legacy hierarchy */
       cfg.force_cgroupv1 = 1;
+      break;
+
+    case 261:
+      /* --block-nested-namespaces: fix VFS deadlock on stock 4.14.x kernels */
+      cfg.block_nested_ns = 1;
       break;
 
     case '?':

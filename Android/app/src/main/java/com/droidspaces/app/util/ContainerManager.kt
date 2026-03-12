@@ -45,7 +45,8 @@ data class ContainerInfo(
     val envFileContent: String? = null,
     val upstreamInterfaces: List<String> = emptyList(),
     val portForwards: List<PortForward> = emptyList(),
-    val forceCgroupv1: Boolean = false
+    val forceCgroupv1: Boolean = false,
+    val blockNestedNs: Boolean = false
 ) {
     val isRunning: Boolean
         get() = status == ContainerStatus.RUNNING
@@ -78,6 +79,7 @@ data class ContainerInfo(
         }
         appendLine("run_at_boot=${if (runAtBoot) "1" else "0"}")
         appendLine("force_cgroupv1=${if (forceCgroupv1) "1" else "0"}")
+        appendLine("block_nested_ns=${if (blockNestedNs) "1" else "0"}")
         appendLine("use_sparse_image=${if (useSparseImage) "1" else "0"}")
         if (sparseImageSizeGB != null) {
             appendLine("sparse_image_size_gb=$sparseImageSizeGB")
@@ -265,7 +267,8 @@ object ContainerManager {
                 envFileContent = loadEnvFileContent(containerName),
                 upstreamInterfaces = upstreamInterfaces,
                 portForwards = portForwards,
-                forceCgroupv1 = configMap["force_cgroupv1"] == "1"
+                forceCgroupv1 = configMap["force_cgroupv1"] == "1",
+                blockNestedNs = configMap["block_nested_ns"] == "1"
             )
         } catch (e: Exception) {
             return null

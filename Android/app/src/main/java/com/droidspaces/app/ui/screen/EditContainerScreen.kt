@@ -81,6 +81,7 @@ fun EditContainerScreen(
     var upstreamInterfaces by remember { mutableStateOf(container.upstreamInterfaces) }
     var portForwards by remember { mutableStateOf(container.portForwards) }
     var forceCgroupv1 by remember { mutableStateOf(container.forceCgroupv1) }
+    var blockNestedNs by remember { mutableStateOf(container.blockNestedNs) }
 
     // Track the "saved" baseline values - updated after each successful save
     var savedHostname by remember { mutableStateOf(container.hostname) }
@@ -98,6 +99,7 @@ fun EditContainerScreen(
     var savedUpstreamInterfaces by remember { mutableStateOf(container.upstreamInterfaces) }
     var savedPortForwards by remember { mutableStateOf(container.portForwards) }
     var savedForceCgroupv1 by remember { mutableStateOf(container.forceCgroupv1) }
+    var savedBlockNestedNs by remember { mutableStateOf(container.blockNestedNs) }
 
     // Navigation and internal UI states
     var showFilePicker by remember { mutableStateOf(false) }
@@ -131,7 +133,8 @@ fun EditContainerScreen(
             envFileContent != savedEnvFileContent ||
             upstreamInterfaces != savedUpstreamInterfaces ||
             portForwards != savedPortForwards ||
-            forceCgroupv1 != savedForceCgroupv1
+            forceCgroupv1 != savedForceCgroupv1 ||
+            blockNestedNs != savedBlockNestedNs
         }
     }
 
@@ -165,7 +168,8 @@ fun EditContainerScreen(
                     envFileContent = if (envFileContent.isBlank()) null else envFileContent,
                     upstreamInterfaces = upstreamInterfaces,
                     portForwards = portForwards,
-                    forceCgroupv1 = forceCgroupv1
+                    forceCgroupv1 = forceCgroupv1,
+                    blockNestedNs = blockNestedNs
                 )
 
                 // Update config file
@@ -191,6 +195,7 @@ fun EditContainerScreen(
                         savedUpstreamInterfaces = upstreamInterfaces
                         savedPortForwards = portForwards
                         savedForceCgroupv1 = forceCgroupv1
+                        savedBlockNestedNs = blockNestedNs
 
                         // Refresh container list and SELinux status using ViewModel
                         containerViewModel.refresh()
@@ -941,6 +946,17 @@ fun EditContainerScreen(
                 onCheckedChange = {
                     clearFocus()
                     forceCgroupv1 = it
+                }
+            )
+
+            ToggleCard(
+                icon = Icons.Default.GppGood,
+                title = context.getString(R.string.block_nested_ns),
+                description = context.getString(R.string.block_nested_ns_description),
+                checked = blockNestedNs,
+                onCheckedChange = {
+                    clearFocus()
+                    blockNestedNs = it
                 }
             )
 

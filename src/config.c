@@ -216,6 +216,8 @@ int ds_config_load(const char *config_path, struct ds_config *cfg) {
       safe_strncpy(cfg->dns_servers, val, sizeof(cfg->dns_servers));
     } else if (strcmp(key, "foreground") == 0) {
       cfg->foreground = parse_bool(val);
+    } else if (strcmp(key, "block_nested_ns") == 0) {
+      cfg->block_nested_ns = parse_bool(val);
     } else if (strcmp(key, "pidfile") == 0) {
     } else if (strcmp(key, "env_file") == 0) {
       if (strstr(val, "..") ||
@@ -398,6 +400,7 @@ int ds_config_save(const char *config_path, struct ds_config *cfg) {
   fprintf(f_out, "volatile_mode=%d\n", cfg->volatile_mode);
   fprintf(f_out, "force_cgroupv1=%d\n", cfg->force_cgroupv1);
   fprintf(f_out, "foreground=%d\n", cfg->foreground);
+  fprintf(f_out, "block_nested_ns=%d\n", cfg->block_nested_ns);
 
   if (cfg->net_mode == DS_NET_NAT) {
     fprintf(f_out, "net_mode=nat\n");

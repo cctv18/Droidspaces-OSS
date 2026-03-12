@@ -135,6 +135,7 @@
     <string name="run_at_boot_option">Run at Boot</string>
     <string name="volatile_option">Volatile</string>
     <string name="cgroupv1_option">Cgroup V1</string>
+    <string name="block_nested_ns_option">No Nested NS</string>
 
     <!-- Container Details Screen -->
     <string name="container_info">Container Info</string>
@@ -167,6 +168,8 @@
     <string name="run_at_boot_description">Start container on boot</string>
     <string name="force_cgroupv1">Force Cgroup V1</string>
     <string name="force_cgroupv1_description">Force use of legacy Cgroup V1 hierarchy</string>
+    <string name="block_nested_ns">Block Nested Namespaces</string>
+    <string name="block_nested_ns_description">Seccomp shield for stock kernels (e.g. 4.14.113 Galaxy S10) with a VFS deadlock bug. Prevents creating nested namespaces. Trade-off: disables systemd sandboxing, Docker/Podman/LXC would fail.</string>
     
     <!-- Config Categories and Network Mode -->
     <string name="cat_networking">Networking</string>
