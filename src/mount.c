@@ -218,6 +218,40 @@ int ds_apply_jail_mask(int hw_access) {
     ds_mask_path(universal_masks[i]);
   }
 
+  /* Universal: mask all cgroup v1 release_agent files.
+   *
+   * In --force-cgroupv1 mode, host cgroup v1 hierarchies are bind-mounted
+   * into the container. release_agent files are writable by root and the
+   * kernel executes them AS REAL HOST ROOT, outside all namespaces, when the
+   * last process leaves a cgroup (notify_on_release=1). This is the
+   * CVE-2022-0492 class of escape - confirmed exploitable in testing.
+   *
+   * We mask them universally (not hw_access-gated). Bind-mounting /dev/null
+   * over each release_agent file makes them unwritable while leaving the
+   * rest of the cgroup hierarchy fully functional. */
+  {
+    DIR *cgdir = opendir("/sys/fs/cgroup");
+    if (cgdir) {
+      struct dirent *de;
+      while ((de = readdir(cgdir)) != NULL) {
+        if (de->d_name[0] == '.')
+          continue;
+        char agent_path[PATH_MAX];
+        snprintf(agent_path, sizeof(agent_path),
+                 "/sys/fs/cgroup/%s/release_agent", de->d_name);
+        if (access(agent_path, F_OK) == 0) {
+          if (mount("/dev/null", agent_path, NULL, MS_BIND, NULL) == 0) {
+            ds_log("[SEC] Masked release_agent: %s", agent_path);
+          } else {
+            ds_warn("[SEC] Failed to mask release_agent %s: %s", agent_path,
+                    strerror(errno));
+          }
+        }
+      }
+      closedir(cgdir);
+    }
+  }
+
   /* Universal Read-Only Mask: /proc/sys/kernel/sysrq
    * We make it RO in ALL modes to prevent host sabotage. */
   const char *sysrq_sysctl = "/proc/sys/kernel/sysrq";
