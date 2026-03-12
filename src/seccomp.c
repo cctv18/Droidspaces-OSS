@@ -58,6 +58,38 @@ int ds_seccomp_apply_minimal(int hw_access) {
       BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
 #endif
 
+      /* unshare(CLONE_NEWUSER) - a new user namespace grants a full capability
+       * set within it, enabling further kernel exploits.
+       * Block the CLONE_NEWUSER flag only - systemd legitimately calls
+       * unshare(CLONE_NEWNS | CLONE_NEWUTS | ...) and must not be affected.
+       *
+       * This is a kernel attack surface restriction and applies to ALL modes.
+       *
+       * Jump layout (4 instructions skipped by jf so nr stays in acc):
+       *   jf=4 skips: LD args[0], JSET, RET EPERM, LD nr → lands at clone check
+       *   JSET jf=1 skips: RET EPERM → lands at LD nr → falls to clone check */
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_unshare, 0, 4),
+      BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+               offsetof(struct seccomp_data, args[0])),
+      BPF_JUMP(BPF_JMP | BPF_JSET | BPF_K, 0x10000000 /* CLONE_NEWUSER */, 0,
+               1),
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA)),
+      /* Reload syscall nr - reached by both "unshare without CLONE_NEWUSER"
+       * (JSET jf=1) and falls through to the clone check below */
+      BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+
+      /* clone(CLONE_NEWUSER) - same attack via the clone() syscall path.
+       *
+       * Jump layout (3 instructions skipped by jf):
+       *   jf=3 skips: LD args[0], JSET, RET EPERM → lands at ALLOW
+       *   JSET jf=1 skips: RET EPERM → lands at ALLOW */
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_clone, 0, 3),
+      BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+               offsetof(struct seccomp_data, args[0])),
+      BPF_JUMP(BPF_JMP | BPF_JSET | BPF_K, 0x10000000 /* CLONE_NEWUSER */, 0,
+               1),
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA)),
+
       /* Allow everything else */
       BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
   };
