@@ -114,12 +114,11 @@ int internal_boot(struct ds_config *cfg) {
   /* Detect init system once — used for seccomp and cgroup setup */
   int is_systemd = is_systemd_rootfs(cfg->rootfs_path);
 
-  /* Apply Android compatibility Seccomp filter to child processes.
-   * On legacy kernels, this neutralizes broken sandboxing logic in systemd
-   * that triggers VFS deadlocks in grab_super(). */
-  if (is_android()) {
-    android_seccomp_setup(is_systemd);
-  }
+  /* 2b. Apply Seccomp filters early for host protection.
+   * Minimal blocks kexec/module loading for all kernels/modes.
+   * Android setup handles keyring compat for legacy kernels. */
+  ds_seccomp_apply_minimal();
+  android_seccomp_setup(is_systemd);
 
   /* 3. Setup volatile overlay INSIDE the container's mount namespace.
    * This MUST happen here (not in parent) so the overlay's connection to
@@ -198,6 +197,10 @@ int internal_boot(struct ds_config *cfg) {
       0) {
     ds_error("Failed to mount procfs: %s", strerror(errno));
     return -1;
+  }
+
+  if (mount(NULL, "proc", NULL, MS_PRIVATE, NULL) < 0) {
+    ds_warn("Failed to make /proc private: %s", strerror(errno));
   }
 
   /* 10b. Optional: Mount binfmt_misc if supported by the kernel (Android only).

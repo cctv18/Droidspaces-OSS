@@ -13,7 +13,7 @@ VERSION := $(shell grep "DS_VERSION" $(SRC_DIR)/droidspace.h | awk '{print $$3}'
 SRCS = $(SRC_DIR)/main.c \
        $(SRC_DIR)/utils.c \
        $(SRC_DIR)/android.c \
-       $(SRC_DIR)/android_seccomp.c \
+       $(SRC_DIR)/seccomp.c \
        $(SRC_DIR)/mount.c \
        $(SRC_DIR)/cgroup.c \
        $(SRC_DIR)/network.c \

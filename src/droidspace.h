@@ -367,6 +367,12 @@ void android_set_selinux_permissive(void);
 int android_get_selinux_status(void);
 void android_remount_data_suid(void);
 int android_setup_storage(const char *rootfs_path);
+
+/* ---------------------------------------------------------------------------
+ * seccomp.c
+ * ---------------------------------------------------------------------------*/
+
+int ds_seccomp_apply_minimal(void);
 int android_seccomp_setup(int is_systemd);
 
 /* ---------------------------------------------------------------------------
