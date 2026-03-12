@@ -838,6 +838,45 @@ int is_systemd_rootfs(const char *path) {
   return 0;
 }
 
+int get_user_shell(const char *user, char *shell_buf, size_t size) {
+  if (!user || user[0] == '\0' || !shell_buf || size == 0)
+    return -1;
+
+  FILE *f = fopen("/etc/passwd", "re");
+  if (!f)
+    return -1;
+
+  char line[1024];
+  int found = 0;
+  while (fgets(line, sizeof(line), f)) {
+    /* Format: user:pw:uid:gid:gecos:home:shell */
+    char line_copy[1024];
+    strncpy(line_copy, line, sizeof(line_copy) - 1);
+    line_copy[sizeof(line_copy) - 1] = '\0';
+
+    char *saveptr;
+    char *name = strtok_r(line_copy, ":", &saveptr);
+    if (!name || strcmp(name, user) != 0)
+      continue;
+
+    /* Skip 5 fields to reach the shell (field 7) */
+    for (int i = 0; i < 5; i++) {
+      if (!strtok_r(NULL, ":", &saveptr))
+        break;
+    }
+    char *shell = strtok_r(NULL, ":\n", &saveptr);
+
+    if (shell) {
+      safe_strncpy(shell_buf, shell, size);
+      found = 1;
+      break;
+    }
+  }
+
+  fclose(f);
+  return found ? 0 : -1;
+}
+
 int get_selinux_context(const char *path, char *buf, size_t size) {
   if (!path || !buf || size == 0)
     return -1;

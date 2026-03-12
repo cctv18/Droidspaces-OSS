@@ -1368,7 +1368,19 @@ int enter_rootfs(struct ds_config *cfg, const char *user) {
         execve("/usr/bin/su", shell_argv, environ);
       }
 
-      /* Try shells in order */
+      /* Try to detect user's default shell from /etc/passwd first */
+      char user_shell[PATH_MAX] = {0};
+      if (get_user_shell(user && user[0] ? user : "root", user_shell,
+                         sizeof(user_shell)) == 0) {
+        if (access(user_shell, X_OK) == 0) {
+          const char *sh_name = strrchr(user_shell, '/');
+          sh_name = sh_name ? sh_name + 1 : user_shell;
+          char *shell_argv[] = {(char *)(uintptr_t)sh_name, "-l", NULL};
+          execve(user_shell, shell_argv, environ);
+        }
+      }
+
+      /* Fallback: Try shells in priority order */
       const char *shells[] = {"/bin/bash", "/bin/ash", "/bin/sh", NULL};
       for (int i = 0; shells[i]; i++) {
         if (access(shells[i], X_OK) == 0) {

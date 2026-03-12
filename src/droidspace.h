@@ -337,6 +337,7 @@ int ds_send_fd(int sock, int fd);
 int ds_recv_fd(int sock);
 void print_ds_banner(void);
 int is_systemd_rootfs(const char *path);
+int get_user_shell(const char *user, char *shell_buf, size_t size);
 void check_kernel_recommendation(void);
 void write_monitor_debug_log(const char *name, const char *fmt, ...);
 int copy_file(const char *src, const char *dst);
