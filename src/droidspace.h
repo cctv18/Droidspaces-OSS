@@ -372,7 +372,7 @@ int android_setup_storage(const char *rootfs_path);
  * seccomp.c
  * ---------------------------------------------------------------------------*/
 
-int ds_seccomp_apply_minimal(void);
+int ds_seccomp_apply_minimal(int hw_access);
 int android_seccomp_setup(int is_systemd);
 
 /* ---------------------------------------------------------------------------
@@ -548,7 +548,7 @@ void write_plain_env_file(const char *src, const char *dst);
  * boot.c
  * ---------------------------------------------------------------------------*/
 
-void ds_apply_capability_hardening(int hw_access);
+void ds_apply_capability_hardening(int hw_access, int net_mode);
 int internal_boot(struct ds_config *cfg);
 
 /* ---------------------------------------------------------------------------

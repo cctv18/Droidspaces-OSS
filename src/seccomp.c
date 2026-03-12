@@ -22,7 +22,8 @@
  * Blocks direct host kernel takeover vectors (module loading, kexec).
  * Applied unconditionally to all kernels and all modes.
  */
-int ds_seccomp_apply_minimal(void) {
+int ds_seccomp_apply_minimal(int hw_access) {
+  (void)hw_access;
   struct sock_filter filter[] = {
       /* Validate architecture */
       BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),

@@ -19,7 +19,7 @@
  * In Hardware Mode (hw_access=1), we preserve most to ensure full
  * low-level hardware access (USB, Serial, Bluetooth, Flashing).
  */
-void ds_apply_capability_hardening(int hw_access) {
+void ds_apply_capability_hardening(int hw_access, int net_mode) {
   /* Universal drops - even in hardware mode, there's no legitimate use
    * for these inside a container (kernel module loading or host reboot). */
   int universal_drops[] = {CAP_SYS_MODULE, CAP_SYS_BOOT, -1};
@@ -65,6 +65,14 @@ void ds_apply_capability_hardening(int hw_access) {
     } else {
       total_dropped++;
     }
+  }
+
+  /* Standard Mode: also drop network capabilities if sharing host network. */
+  if (net_mode == DS_NET_HOST) {
+    if (prctl(PR_CAPBSET_DROP, CAP_NET_ADMIN, 0, 0, 0) == 0)
+      total_dropped++;
+    if (prctl(PR_CAPBSET_DROP, CAP_NET_RAW, 0, 0, 0) == 0)
+      total_dropped++;
   }
 
   ds_log("[SEC] Bounding set hardened (dropped %d caps).", total_dropped);
@@ -180,7 +188,7 @@ int internal_boot(struct ds_config *cfg) {
   /* 2b. Apply Seccomp filters early for host protection.
    * Minimal blocks kexec/module loading for all kernels/modes.
    * Android setup handles keyring compat for legacy kernels. */
-  ds_seccomp_apply_minimal();
+  ds_seccomp_apply_minimal(cfg->hw_access);
   android_seccomp_setup(is_systemd);
 
   /* 3. Setup volatile overlay INSIDE the container's mount namespace.
@@ -480,7 +488,7 @@ int internal_boot(struct ds_config *cfg) {
   /* 23c. Apply security hardening (capabilities)
    * This is done at the very end to ensure all setup tasks that might need
    * privileges (like chown/chmod) are finished. */
-  ds_apply_capability_hardening(cfg->hw_access);
+  ds_apply_capability_hardening(cfg->hw_access, cfg->net_mode);
 
   /* 24. Redirect standard I/O to /dev/console */
   int console_fd = open("/dev/console", O_RDWR);

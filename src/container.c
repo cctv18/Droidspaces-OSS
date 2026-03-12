@@ -1283,9 +1283,9 @@ int enter_rootfs(struct ds_config *cfg, const char *user) {
      * We are now inside the container's mount namespace, so
      * is_systemd_rootfs("/") resolves against the container's rootfs. */
     ds_log_silent = 1;
-    ds_seccomp_apply_minimal();
+    ds_seccomp_apply_minimal(cfg->hw_access);
     android_seccomp_setup(is_systemd_rootfs("/"));
-    ds_apply_capability_hardening(cfg->hw_access);
+    ds_apply_capability_hardening(cfg->hw_access, cfg->net_mode);
     ds_log_silent = 0;
 
     /* Allocate TTY INSIDE the container namespaces */
@@ -1467,9 +1467,9 @@ int run_in_rootfs(struct ds_config *cfg, int argc, char **argv) {
     /* Apply identical security hardening as internal_boot() and enter_rootfs().
      * Same reasoning: run processes are not children of container PID 1. */
     ds_log_silent = 1;
-    ds_seccomp_apply_minimal();
+    ds_seccomp_apply_minimal(cfg->hw_access);
     android_seccomp_setup(is_systemd_rootfs("/"));
-    ds_apply_capability_hardening(cfg->hw_access);
+    ds_apply_capability_hardening(cfg->hw_access, cfg->net_mode);
     ds_log_silent = 0;
 
     pid_t cmd_pid = fork();
