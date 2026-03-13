@@ -65,7 +65,7 @@
 #define DS_MIN_KERNEL_MINOR 18
 #define DS_RECOMMENDED_KERNEL_MAJOR 4
 #define DS_RECOMMENDED_KERNEL_MINOR 14
-#define DS_AUTHOR "ravindu644, Antigravity"
+#define DS_AUTHOR "ravindu644"
 #define DS_REPO "https://github.com/ravindu644/Droidspaces-OSS"
 #define DS_MAX_TTYS 6
 #define DS_UUID_LEN 32

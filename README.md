@@ -94,7 +94,7 @@ The entire runtime is a **single static binary** under 260KB, compiled against m
 | **Network Isolation** | **3 Networking Modes (Host, NAT, None)**. Pure network isolation via `CLONE_NEWNET` (NAT/None modes) or shared host networking (Host mode). Works on both Android and Linux. |
 | **Port Forwarding** | Forward host ports to the container in NAT mode (e.g., `--port 22:22`). Supports TCP and UDP. |
 | **Volatile Mode** | Ephemeral containers using OverlayFS. All changes are stored in RAM and discarded on exit. Perfect for testing and development. |
-| **Custom Bind Mounts** | Map host directories into containers at arbitrary mount points. Supports both chained (`-B a:b -B c:d`) and comma-separated (`-B a:b,c:d`) syntax, up to 16 mounts. |
+| **Custom Bind Mounts** | Map host directories into containers at arbitrary mount points. Supports both chained (`-B a:b -B c:d`) and comma-separated (`-B a:b,c:d`) syntax. |
 | **Config File Support** | Load configurations directly from `.config` files using `--conf`. Integrates seamlessly with the CLI overrides (`--reset` is supported) and automatically syncs to the workspace for persistence. |
 | **Hardware Access Mode** | Expose host hardware (GPU, cameras, sensors, USB) to the container via devtmpfs. Enables GPU acceleration with Turnip + Zink / Panfrost on supported Android devices. PulseAudio and Virgl are also supported in Android |
 | **Multiple Containers** | Run unlimited containers simultaneously, each with its own name, PID file, and configuration. Start, stop, enter, and manage them independently. |
@@ -107,7 +107,7 @@ The entire runtime is a **single static binary** under 260KB, compiled against m
 | **Rootfs Image Support** | Boot containers from ext4 `.img` files with automatic loop mounting, filesystem checks, and SELinux context hardening if needed. **The Android app also supports creating portable containers in rootfs.img mode** [ [How to create an ext4 rootfs.img manually ? ](./Documentation/Installation-Linux.md#option-b-create-an-ext4-image-recommended)] |
 | **Auto-Recovery** | Automatic stale PID file cleanup, container scanning for orphaned processes, and robust config resurrection via in-memory metadata syncing from `/run/droidspaces`. |
 | **Cgroup Isolation (v1/v2)** | Per-container cgroup hierarchies (`/sys/fs/cgroup/droidspaces/<name>`) with full systemd compatibility. Supports both legacy v1 and modern v2 hierarchies. |
-| **Adaptive Seccomp Shield** | Kernel-aware BPF filter that resolves FBE keyring conflicts and prevents VFS deadlocks for **systemd** containers on legacy Android kernels (< 5.0). Automatically grants full namespace freedom to non-systemd containers (Alpine, OpenRC, runit, etc.), enabling features like **nested containers/Docker**. |
+| **Adaptive Security & Deadlock Shield** | Kernel-aware BPF filters resolve FBE keyring conflicts automatically on legacy kernels. A manual **Deadlock Shield** toggle is available to fix the specific VFS `grab_super()` deadlock on affected legacy devices (e.g., kernel 4.14.113). When the shield is disabled (default), Droidspaces grants full namespace freedom enabling features like **nested containers/Docker** natively on all kernels. |
 
 ---
 
@@ -143,7 +143,7 @@ The entire runtime is a **single static binary** under 260KB, compiled against m
 | Binary Size | 10MB+ (plus dependencies) | Under 260KB per architecture. |
 | Android Optimizations | None. Not designed for Android. | Yes. SELinux handling, FBE keyring management, storage integration, networking fixes |
 | Termux Required | Often. Used as the execution environment. | Never. Runs directly as a native binary. |
-| Nested Containers | Complex setup required. | Supported natively on 5.x+. On legacy kernels (< 5.0), supported *only* in non-systemd containers (Alpine) with kernel-level caveats. |
+| Nested Containers | Complex setup required. | Supported natively on all kernels out of the box. |
 | Init System | LXC = yes, Docker = no. | Always. systemd/OpenRC as PID 1 by default. |
 
 ---
@@ -161,7 +161,7 @@ Droidspaces supports Android devices running Linux kernel **3.18 and above**:
 | Kernel Version | Support Level | Notes |
 |----------------|---------------|-------|
 | 3.18 | Supported | **Legacy.** Minimum floor. Basic namespace support. systemd-based distros may be unstable; **Alpine** is recommended. |
-| 4.4 - 4.19 | Stable | **Hardened.** Full support via Adaptive Seccomp Shield. [Supports any container with Systemd older than v258](./Documentation/Troubleshooting.md#modern-distros). |
+| 4.4 - 4.19 | Stable | **Hardened.** [Full support upto modern distros with systemd older than v258](./Documentation/Troubleshooting.md#modern-distros). Nested containers (Docker/Podman) are natively supported. If you encounter systemd hangs on specific kernels (like 4.14.113) due to the VFS deadlock bug, manually enable the **Deadlock Shield** [[more info](./Documentation/Features.md#vfs-deadlock)]. |
 | 5.4 - 5.10 | Recommended | **Mainline.** Full feature support including nested containers and Cgroup v2. |
 | 5.15+ | Premium | **Full.** Best performance and maximum compatibility with all modern distributions. |
 
@@ -173,9 +173,9 @@ Your device must be rooted. The following rooting methods have been tested:
 
 | Root Method | Status | Notes |
 |-------------|--------|-------|
-| **KernelSU-Next** | Fully Supported | Tested and stable. Recommended. |
-| **APatch** | Not Supported | Init system fails to start. |
-| **Magisk** | Planned | Testing has not yet been conducted. |
+| **KernelSU** | Fully Supported | Tested and stable. Recommended. |
+| **APatch** | Partially Supported | Init fails to start due to a seccomp block related to the `u:r:magisk:s0` SELinux domain. This happens only on some devices, while some users run Droidspaces with APatch successfully [[more info](https://github.com/ravindu644/Droidspaces-OSS/issues/11#issuecomment-4036688816)]. |
+| **Magisk** | Partially Supported | Same situation as APatch. Some users succeed, while others do not. [[more info](https://github.com/ravindu644/Droidspaces-OSS/issues/11#issuecomment-4036688816)]|
 
 <a id="kernel-requirements"></a>
 
@@ -222,16 +222,6 @@ You can verify your system meets all requirements by running:
 ```bash
 sudo ./droidspaces check
 ```
-
----
-
-<a id="tested-platforms"></a>
-
-## Tested Platforms
-
-Droidspaces is brand-agnostic and distribution-agnostic. Regardless of your mobile device's brand or your desktop Linux distribution, Droidspaces will work as long as your kernel meets the [required configuration](Documentation/Kernel-Configuration.md).
-
-For the list of devices and distributions verified by the community, see the [Tested Platforms Guide](Documentation/Platforms.md).
 
 ---
 

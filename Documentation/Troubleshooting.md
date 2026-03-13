@@ -4,14 +4,12 @@ Common issues, their causes, and how to fix them.
 
 ### Quick Navigation
 - [Modern Distros (Arch, Fedora, etc.) Failure on Legacy Kernels](#modern-distros-arch-fedora-etc-failure-on-legacy-kernels)
-- ["Required key not available" (ENOKEY)](#required-key-not-available-enokey)
+- ["Required key not available" (ENOKEY)](#required-key-not-available)
 - [Mount Errors on Kernel 4.14](#mount-errors-on-kernel-414)
 - [OverlayFS Not Supported (f2fs)](#overlayfs-not-supported-f2fs)
-- [Container Won't Stop](#container-wont-stop)
-- [PTY Issues (Login Hangs)](#pty-issues-login-hangs)
 - [Container Name Conflicts](#container-name-conflicts)
 - [Systemd Hangs on Older Kernels](#systemd-hangs-on-older-kernels)
-- ["Not a TTY" Errors](#not-a-tty-errors)
+- [Container Won't Stop](#container-wont-stop)
 - [Rootfs Image I/O Errors on Android](#rootfs-image-io-errors-on-android)
 - [DNS / Name Resolution Issues](#dns--name-resolution-issues)
 - [WiFi/Mobile Data Disconnects](#wifimobile-data-disconnects)
@@ -97,31 +95,6 @@ droidspaces --name=test --rootfs-img=/data/rootfs.img --volatile start
 
 ---
 
-## Container Won't Stop
-
-**Symptoms:** `droidspaces stop` hangs or reports that the container is still running.
-
-**Cause:** The container's init system may not be responding to shutdown signals, or processes inside the container are blocking the shutdown.
-
-**Solution:** Restart the Device.
-
----
-
-## PTY Issues (Login Hangs)
-
-**Symptoms:** After entering a container with `droidspaces enter`, the terminal hangs or `login`/`su` commands don't respond.
-
-**Cause:** This can happen if the entering process is not properly attached to the container's cgroup hierarchy. `systemd-logind` and `sd-pam` need the process to be in the container's cgroup to create a valid session.
-
-**Solution:** This was fixed in Droidspaces v4.2.0+. The `enter` command now automatically attaches the process to the container's host-side cgroup before joining namespaces.
-
-If you're still experiencing issues:
-- Update to the latest Droidspaces version
-- Try entering as root first: `droidspaces --name=mycontainer enter`
-- Check if the container is fully booted: `droidspaces --name=mycontainer status`
-
----
-
 ## Container Name Conflicts
 
 **Symptoms:** Starting a container fails because a container with the same name is already running, or PID file conflicts occur.
@@ -151,37 +124,23 @@ If you're still experiencing issues:
 
 **Cause:** systemd's service sandboxing (`PrivateTmp=yes`, `ProtectSystem=yes`) triggers a race condition in the kernel's VFS `grab_super` path on legacy kernels.
 
-**Solution:** The Adaptive Seccomp Shield (active on kernels < 5.0) prevents this by intercepting namespace-related syscalls from sandboxed services. systemd gracefully runs services without sandboxing instead.
-
-If you're experiencing hangs:
-- Verify the seccomp shield is active: `droidspaces check` should show seccomp support
-- Update to the latest Droidspaces version
-- Consider upgrading the kernel if possible
+**Solution:** Try enabling the "Deadlock Shield" on App/`--block-nested-namespaces` in CLI, hard reboot your device, and try again.
 
 ---
 
-## "Not a TTY" Errors
+## Container Won't Stop
 
-**Symptoms:** Commands like `sudo` or interactive programs complain about "not a tty" when run inside the container.
+**Symptoms:** `droidspaces stop` takes more than 15 seconds to stop the container and eventually fail.
 
-**Cause:** The terminal is not properly set up as a controlling TTY inside the container.
+**Cause:** Exact same cuase of [Systemd Hangs on Older Kernels](#systemd-hangs-on-older-kernels).
 
-**Solution:** Use `droidspaces enter` to get a proper interactive session. If running commands with `droidspaces run`, note that the run command does not allocate a full PTY for non-interactive execution.
-
-For interactive commands that need a TTY:
-```bash
-# Use enter instead of run
-droidspaces --name=mycontainer enter
-
-# Or use run with a shell wrapper
-droidspaces --name=mycontainer run sh -c "your-command"
-```
+**Solution:** Try enabling the "Deadlock Shield" on App/`--block-nested-namespaces` in CLI, hard reboot your device, and try again.
 
 ---
 
 ## Rootfs Image I/O Errors on Android
 
-**Symptoms:** Loop-mounting a rootfs image silently fails, or the container starts but filesystem operations cause errors.
+**Symptoms:** Loop-mounting a rootfs image silently fails.
 
 **Cause:** On certain Android devices, the SELinux context of the `.img` file prevents the loop driver from performing I/O.
 
@@ -216,13 +175,16 @@ chcon u:object_r:vold_data_file:s0 /path/to/rootfs.img
 
 **Cause:** The container's `systemd-networkd` service may conflict with Android's network management or attempt to override host-side network configurations.
 
-**Solution:** Mask the `systemd-networkd` service inside the container to prevent it from starting:
+**Solutions:**
 
-1. **Via Android App**: Go to **Panel** -> **Container Name** -> **Manage** (Systemd Menu) and find `systemd-networkd`, then tap on 3 dot icon next to the `systemd-networkd` card and select **Mask**.
-2. **Via Terminal**:
-   ```bash
-   sudo systemctl mask systemd-networkd
-   ```
+- If you are using the host networking mode: Mask the `systemd-networkd` service inside the container to prevent it from starting:
+
+   1. **Via Android App**: Go to **Panel** -> **Container Name** -> **Manage** (Systemd Menu) and find `systemd-networkd`, then tap on 3 dot icon next to the `systemd-networkd` card and select **Mask**.
+   2. **Via Terminal**:
+      ```bash
+      sudo systemctl mask systemd-networkd
+      ```
+- Use isolated NAT mode for maximum networking freedom without any conflicts to the host's networking.
 
 ---
 

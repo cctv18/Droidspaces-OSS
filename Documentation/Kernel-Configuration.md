@@ -291,30 +291,27 @@ This checks for:
 
 | Version | Support | Notes |
 |---------|---------|-------|
-| 3.18 | Legacy | **Minimum floor.** Basic namespace support. Modern distros are unstable or won't even boot; **Alpine** is recommended. |
-| 4.4 - 4.19 | Stable | **Hardened.** Full support with adaptive Seccomp shield. Supports any distribution with **systemd versions older than v258** (e.g., Ubuntu 22.04, 24.04, 25.04, 25.10 with v257.9). Modern distros with systemd v258+ (Arch, Fedora, openSUSE) often fail on these older kernels due to missing modern syscalls [[ref](./Troubleshooting.md#modern-distros)]. |
+| 3.18 | Legacy | **Minimum floor.** Basic namespace support. Modern distros are unstable or won't even boot. |
+| 4.4 - 4.19 | Stable | **Hardened.** Full support. Nested containers (Docker/Podman) are natively supported. If you encounter systemd hangs on specific kernels (like 4.14.113) due to the VFS deadlock bug, manually enable the **Deadlock Shield** in the container config. |
 | 5.4 - 5.10 | Recommended | **Mainline.** Full feature support, including nested containers and modern Cgroup v2. |
 | 5.15+ | Ideal | **Premium.** All features, best performance, and widest compatibility. |
 
-<a id="nested-warning"></a>
+---
 > [!WARNING]
 >
-> Nested tools like Docker require namespace freedom that Droidspaces must restrict for **systemd-based** containers on legacy kernels (< 5.0) to prevent deadlocks. Therefore, nested containerization on these kernels is only supported when using a non-systemd base (e.g., **Alpine Linux**). Even then, they may fail if they require modern host kernel features (like BPF cgroup hooks) that are missing on old kernels.
->
-
----
-
 <a id="nested"></a>
-## Nested Containers on Legacy Kernels
+## Nested Containers (Docker, Podman, LXC)
 
-On legacy kernels (especially Kernel 4.19 and below), Droidspaces allows nested containerization (e.g., Docker inside Alpine) by selectively disabling the Seccomp shield for non-systemd containers. However, you may still encounter host kernel limitations:
+Droidspaces natively supports nested containerization (running Docker, Podman, or LXC inside a Droidspaces container) out-of-the-box on all kernel versions. Since namespace creation restrictions are no longer hard-coded for legacy kernels, you have full freedom to deploy complex container stacks.
 
-- **BPF Conflicts**: Modern Docker/runc versions use `BPF_CGROUP_DEVICE` for device management. Legacy kernels often lack the required BPF attach types, leading to `Invalid argument` errors during `docker run`.
-- **Cgroup v1 Limits**: Service sandboxing and resource limiting in nested environments may behave unexpectedly on older cgroup v1 implementations.
-- **Performance**: Volatile mode overhead is significantly higher when nesting multiple layers of OverlayFS.
+### Legacy Kernel Considerations (4.19 and below)
 
-**Workaround for Docker on legacy kernels:**
-If you see `bpf_prog_query` errors, try using a legacy `runc` binary or configuring Docker to use the older `cgroupfs` driver and `vfs` storage driver if necessary.
+While namespace blocking is removed, legacy host kernels may still present challenges for modern nested tools:
+
+- **Deadlock Shield Trade-off**: If your specific device suffers from the 4.14.113 `grab_super()` VFS deadlock and requires the **Deadlock Shield** to boot systemd, enabling the shield will block the namespace syscalls required by Docker and Podman. You cannot use nested containers if the shield is active.
+- **Networking Incompatibilities**: Modern Docker/Podman rely on `nftables`. Legacy kernels often lack full `nftables` support. **Workaround:** Ensure you are using Droidspaces' **NAT mode**, and switch your container's alternatives configuration to use `iptables-legacy` and `ip6tables-legacy`.
+- **BPF Conflicts**: Modern Docker/runc versions use `BPF_CGROUP_DEVICE` for device management. Legacy kernels lack the required BPF attach types, leading to `Invalid argument` errors.
+  - **Workaround:** Configure Docker to use the older `cgroupfs` driver and `vfs` storage driver.
 
 ---
 

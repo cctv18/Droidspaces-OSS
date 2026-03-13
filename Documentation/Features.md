@@ -29,10 +29,6 @@ Droidspaces supports three networking modes that determine whether a network nam
 
 3. **None Mode (`--net=none`)**: The container is placed in a private, air-gapped network namespace with only the loopback interface enabled for maximum security.
 
-### Why Not User Namespace?
-
-User namespaces (`CLONE_NEWUSER`) are also not used. While modern Android kernels often support user namespaces, Droidspaces requires real root privileges on the host to perform critical operations like mounting filesystems, managing loop devices, and configuring cgroups. Running inside a user namespace would map the process to a non-privileged UID on the host, stripping the "real" root authority needed for these low-level system tasks. Skipping user namespaces ensures the container has the full power required to boot a complete Linux distribution.
-
 ### How It Compares to Chroot
 
 A `chroot` only changes the apparent root directory for a process. It provides no process isolation, no mount isolation, no hostname isolation, and no IPC isolation. Any process inside a chroot shares the host's PID space, can see and signal other processes, and cannot run an init system like systemd.
@@ -134,7 +130,7 @@ The `--hw-access` flag exposes the host's hardware devices to the container by m
 This gives the container access to:
 - **GPU** (for hardware-accelerated graphics via Turnip + Zink, Panfrost/Native GPU Acceleration in desktop for Intel and AMD)
 - **Cameras**
-- **Sensors** (accelerometer, gyroscope, etc.)
+- **Sensors**
 - **USB devices**
 - **Block Devices** (Partitions and physical disks)
 
@@ -166,9 +162,9 @@ droidspaces --name=gpu-test --rootfs=/path/to/rootfs --hw-access start
 
 When `--hw-access` is enabled, Droidspaces automatically:
 
-1. **Scans host GPU devices** — Before `pivot_root`, it probes ~40 known GPU device paths (`/dev/dri/*`, `/dev/mali*`, `/dev/kgsl-3d0`, `/dev/nvidia*`, etc.) and collects their group IDs via `stat()`. **Dangerous nodes like `/dev/dri/card*` are explicitly skipped** to prevent host kernel panics, as these nodes are restricted to the host's display manager.
-2. **Creates matching groups** — After `pivot_root`, it appends entries like `gpu_<GID>:x:<GID>:root` to the container's `/etc/group`. The container's root user is automatically added to each group.
-3. **Idempotent restarts** — On container restart, existing groups are detected and skipped (no duplicate entries).
+1. **Scans host GPU devices** - Before `pivot_root`, it probes ~40 known GPU device paths (`/dev/dri/*`, `/dev/mali*`, `/dev/kgsl-3d0`, `/dev/nvidia*`, etc.) and collects their group IDs via `stat()`. **Dangerous nodes like `/dev/dri/card*` are explicitly skipped** to prevent host kernel panics, as these nodes are restricted to the host's display manager.
+2. **Creates matching groups** - After `pivot_root`, it appends entries like `gpu_<GID>:x:<GID>:root` to the container's `/etc/group`. The container's root user is automatically added to each group.
+3. **Idempotent restarts** - On container restart, existing groups are detected and skipped (no duplicate entries).
 
 This eliminates the need for manual `groupadd`/`usermod` commands inside the container, while ensuring the host's kernel stability by avoiding restricted hardware paths.
 
@@ -226,7 +222,6 @@ Bind mounts allow you to map a directory from the host filesystem into the conta
 
 ### Limits
 
-- Maximum of **16 bind mounts** per container
 - Destination must be an **absolute path**
 - Path traversal (`..`) in destinations is **rejected** for security
 
@@ -315,10 +310,6 @@ droidspaces --name=ubuntu --rootfs-img=/path/to/rootfs.img start
 droidspaces --name=ubuntu --rootfs-img=/path/to/rootfs.img --volatile start
 ```
 
-### Fast Restart with Images
-
-When restarting an image-based container, Droidspaces preserves the loop mount. The restart command creates a coordination marker that tells the monitor process to skip cleanup. The next start detects this marker and reuses the existing mount, bypassing `e2fsck` and mount setup entirely.
-
 ---
 
 ## Cgroup Isolation
@@ -362,29 +353,32 @@ When entering a container with `enter` or `run`, the process must be in the cont
 
 ---
 
-## Adaptive Seccomp Shield
+## Adaptive Security & Deadlock Shield
 
-### What It Does
+Droidspaces includes sophisticated BPF-based seccomp filters to resolve critical Android kernel conflicts:
 
-On Android devices with legacy kernels (< 5.0), Droidspaces installs a BPF-based seccomp filter that resolves two critical conflicts:
+### 1. FBE Keyring Conflict (Automatic)
+Android's File-Based Encryption stores filesystem keys in the kernel's session keyring. When systemd attempts to create new session keyrings, the process loses access to the host's encryption keys, causing `ENOKEY` errors.
 
-### Problem 1: FBE Keyring Conflict
+**Solution:** On legacy kernels (< 5.0), Droidspaces *automatically* intercepts keyring syscalls (`keyctl`, `add_key`, `request_key`) returning `ENOSYS`, forcing systemd to use the existing keyring.
 
-Android's File-Based Encryption (FBE) stores filesystem keys in the kernel's session keyring. When systemd's services attempt to create new session keyrings, the process loses access to the host's encryption keys. This causes "Required key not available" (ENOKEY) errors.
+<a id="vfs-deadlock"></a>
 
-**Solution:** The filter intercepts `keyctl`, `add_key`, and `request_key` syscalls and returns `ENOSYS`, causing systemd to fall back to the existing keyring.
+### 2. VFS Namespace Deadlock (Manual Opt-in)
+On certain devices with legacy kernels (notably 4.14.113, common on 2019-2020 Android devices), systemd's service sandboxing triggers a race condition in the kernel's VFS layer (`grab_super()` bug). This causes systemd to hang, `systemctl` to freeze, and potential device lockups. 4.9 and 4.19 kernels are largely unaffected.
 
-### Problem 2: VFS Namespace Deadlock
+**The Fix:** You can manually enable the **Deadlock Shield** (in the Android App config or via `--block-nested-namespaces` CLI). This intercepts `unshare` and `clone` namespace requests with `EPERM`, preventing systemd from triggering the deadlock.
 
-On kernels 4.19 and below, systemd's service sandboxing (`PrivateTmp=yes`, `ProtectSystem=yes`) triggers race conditions in the kernel's VFS layer. This can cause system hangs or kernel panics.
+### Nested Containers (Docker, Podman, LXC)
 
-**Solution:** The filter intercepts `unshare` and `clone` calls requesting namespace flags and returns `EPERM`. systemd gracefully runs the service without sandboxing.
+Because the Deadlock Shield is now strictly an **opt-in toggle** rather than a hard-coded blanket ban:
+- **Native Support:** Users on all kernels can now run Docker, Podman, and LXC natively out-of-the-box.
+- **The Trade-off:** If your device requires the Deadlock Shield to boot systemd, enabling it will intentionally block the namespace creations required by Docker/Podman.
 
-### Adaptive Behavior
+> [!TIP]
+>
+> **Legacy Kernel Networking:** When running Docker/Podman inside Droidspaces on legacy kernels, modern `nftables` may fail to route traffic. We recommend using Droidspaces' NAT mode and switching your container's networking stack to `iptables-legacy` and `ip6tables-legacy`.
 
-- **Kernel < 5.0:** Full seccomp shield is active (both keyring and namespace protections).
-    - **Nested Containers**: Works on legacy kernels *only if* the base container is NOT systemd-based (e.g., using **Alpine Linux**). This allows Docker or other nested runtimes to manage their own namespaces without conflict.
-- **Kernel >= 5.0:** Shield is completely skipped. Modern kernels handle these cases natively, and disabling the filter allows full-featured, native operation for all distributions, including nested containers.
 
 ---
 
@@ -397,12 +391,3 @@ Droidspaces includes several sophisticated subsystems designed specifically to h
 Standard Linux distributions use `udevadm trigger` to "coldplug" hardware devices during boot. On many Android devices, triggering all devices simultaneously causes the kernel to deadlock or panic because Android's own hardware drivers (which are already running) do not expect another manager to re-trigger them.
 
 **The Solution**: Droidspaces masks the standard udev trigger services and installs a **Safe Udev Trigger**. This service only triggers a strictly defined subset of subsystems (`usb`, `block`, `input`, `tty`) that are safe to re-scan. This enables the container to see new USB drives or keyboards without risking a system crash.
-
-### Atomic Backend Installation
-
-To prevent the "Text file busy" error when updating the `droidspaces` binary while a container is running, the Android app uses an **Atomic Move Strategy**:
-1. The new binary is copied to a temporary file (`.tmp`).
-2. Permissions are set on the temporary file.
-3. The app uses `mv -f` (an atomic inode rename in the kernel) to replace the production binary.
-
-This ensures that updates are 100% safe and never leave the system in a corrupted state if an update is interrupted.
