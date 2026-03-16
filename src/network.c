@@ -276,7 +276,7 @@ static void ds_net_auto_assign_ip(struct ds_config *cfg) {
 
   /* Walk up to a full /16 to find an unoccupied slot */
   for (int attempts = 0; attempts < 254 * 254; attempts++) {
-    char candidate[INET_ADDRSTRLEN];
+    char candidate[32];
     snprintf(candidate, sizeof(candidate), "172.28.%d.%d", o3, o4);
 
     if (ds_net_check_ip_collision(candidate, cfg->container_name) == 0) {
@@ -292,8 +292,9 @@ static void ds_net_auto_assign_ip(struct ds_config *cfg) {
   }
 
   /* Subnet is completely exhausted - reuse hash address as last resort */
-  snprintf(cfg->static_nat_ip, sizeof(cfg->static_nat_ip), "172.28.%d.%d", o3,
-           o4);
+  char fallback[32];
+  snprintf(fallback, sizeof(fallback), "172.28.%d.%d", o3, o4);
+  safe_strncpy(cfg->static_nat_ip, fallback, sizeof(cfg->static_nat_ip));
   ds_warn("[NET] NAT subnet appears fully allocated - reusing %s as fallback",
           cfg->static_nat_ip);
 }

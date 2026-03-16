@@ -977,7 +977,8 @@ int start_rootfs(struct ds_config *cfg) {
       if (root_fd >= 0) {
         char pid_s[32];
         int len = snprintf(pid_s, sizeof(pid_s), "%d", (int)getpid());
-        write(root_fd, pid_s, len);
+        if (write(root_fd, pid_s, len) < 0) {
+        }
         close(root_fd);
       }
     }

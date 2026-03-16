@@ -507,7 +507,8 @@ int ds_cgroup_attach(pid_t target_pid) {
 
     char pid_s[32];
     int len = snprintf(pid_s, sizeof(pid_s), "%d", (int)getpid());
-    write(fd, pid_s, len);
+    if (write(fd, pid_s, len) < 0) {
+    }
     close(fd);
   }
 
@@ -617,7 +618,8 @@ static void rmdir_cgroup_tree(const char *path) {
   if (access(kill_path, W_OK) == 0) {
     int kfd = open(kill_path, O_WRONLY | O_CLOEXEC);
     if (kfd >= 0) {
-      write(kfd, "1", 1);
+      if (write(kfd, "1", 1) < 0) {
+      }
       close(kfd);
     }
   }
