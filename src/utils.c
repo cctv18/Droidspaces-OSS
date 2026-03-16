@@ -712,6 +712,14 @@ static void write_to_log_file(const char *name, const char *component,
   char log_path[PATH_MAX];
   snprintf(log_path, sizeof(log_path), "%.4090s/log", log_dir);
 
+  /* Rotate log to log.old if it exceeds 2MB */
+  struct stat st;
+  if (stat(log_path, &st) == 0 && st.st_size >= 2 * 1024 * 1024) {
+    char old_log_path[PATH_MAX + 8];
+    snprintf(old_log_path, sizeof(old_log_path), "%s.old", log_path);
+    rename(log_path, old_log_path);
+  }
+
   FILE *f = fopen(log_path, "ae"); /* append + close-on-exec */
   if (!f)
     return;

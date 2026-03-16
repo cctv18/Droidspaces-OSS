@@ -73,6 +73,8 @@ typedef struct {
   volatile sig_atomic_t stop;
   pthread_t tid;
   pid_t container_pid;
+  in_addr_t last_warn_v4; /* rate-limit per IP */
+  time_t last_warn_time;  /* rate-limit threshold */
 } ds_dns_proxy_ctx_t;
 
 static ds_dns_proxy_ctx_t g_proxy = {.sock = -1};
@@ -335,7 +337,13 @@ static void *dns_proxy_loop(void *arg) {
       struct in_addr ia;
       ia.s_addr = d1;
       inet_ntop(AF_INET, &ia, s, sizeof(s));
-      ds_warn("[DNS] Upstream %s timed out - dropping query", s);
+
+      time_t now = time(NULL);
+      if (d1 != ctx->last_warn_v4 || (now - ctx->last_warn_time) > 30) {
+        ds_warn("[DNS] Upstream %s timed out - dropping query", s);
+        ctx->last_warn_v4 = d1;
+        ctx->last_warn_time = now;
+      }
       continue;
     }
 
