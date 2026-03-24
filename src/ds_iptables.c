@@ -1087,7 +1087,7 @@ static int addrtype_available(void) {
  * user edits (or empties) the port-forward list in the container config
  * while the container is running (config-drift).
  *
- * State file path : <workspace>/pf_<container_ip>.state
+ * State file path : <workspace>/Net/pf_<container_ip>.state
  * Format          : one line per inserted rule, 5 space-separated fields:
  *   <addrtype|basic> <proto> <host_port_str> <to_dest> <cont_port_str>
  *
@@ -1222,7 +1222,7 @@ int ds_ipt_add_portforwards(struct ds_config *cfg, const char *container_ip) {
      * Preferred: -m addrtype --dst-type LOCAL restricts the rule to traffic
      * destined for the phone itself — prevents hijacking hotspot client flows.
      * Fallback: omit addrtype on kernels where xt_addrtype is absent (common
-     * on Android 4.14 and below). The rule is broader but still functional.
+     * on Kernel 4.14 and below). The rule is broader but still functional.
      *
      * We record which variant was actually inserted in the state file so
      * ds_ipt_remove_portforwards can issue the exact matching -D later. */
