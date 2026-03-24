@@ -856,7 +856,8 @@ int main(int argc, char **argv) {
   }
 
   /* Prevent Termux suicide when --termux-x11 is used inside Termux */
-  if (is_android() && cfg.termux_x11 && is_running_in_termux()) {
+  if (is_android() && cfg.termux_x11 && is_running_in_termux() &&
+      (strcmp(cmd, "start") == 0 || strcmp(cmd, "restart") == 0)) {
     printf("\n" C_RED C_BOLD "[ FATAL: Termux X11 Conflict ]" C_RESET "\n\n");
     ds_error(
         "Droidspaces cannot enable --termux-x11 when running inside Termux.");
